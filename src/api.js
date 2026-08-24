@@ -26,6 +26,13 @@ export const saveImage = (postId, dataUrl) =>
   req("data", { action: "image", passcode: savedPass(), postId, dataUrl });
 export const deleteImage = (postId) =>
   req("data", { action: "image", passcode: savedPass(), postId, dataUrl: null });
+
+export const updatePost = (postId, fields, theme) =>
+  req("data", { action: "post-update", passcode: savedPass(), postId, fields, theme });
+export const deletePost = (postId) =>
+  req("data", { action: "post-delete", passcode: savedPass(), postId });
+export const clearAll = () => req("data", { action: "clear", passcode: savedPass() });
+
 export const saveEntry = (postId, entry) => req("data", { action: "feedback", postId, entry });
 
 export const localName = () => localStorage.getItem("portal:name") || "";
