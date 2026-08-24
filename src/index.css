@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { min-height: 100%; }
+body { margin: 0; -webkit-font-smoothing: antialiased; }
+button { background: none; border: none; padding: 0; cursor: pointer; font: inherit; color: inherit; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid #B0842A; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

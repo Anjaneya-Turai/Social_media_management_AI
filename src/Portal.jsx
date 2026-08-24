@@ -1,0 +1,1000 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Upload, Instagram, Facebook, Linkedin, Heart, MessageCircle, Send, Bookmark,
+  MoreHorizontal, ThumbsUp, Share2, Repeat2, Globe, Check, X, Copy, ChevronLeft,
+  ChevronRight, Lock, ClipboardList, Image as ImageIcon, Trash2, CircleDot,
+} from "lucide-react";
+import * as api from "./api";
+
+/* ------------------------------------------------------------------ tokens */
+const T = {
+  ink: "#1B1714",
+  charcoal: "#231E1A",
+  ivory: "#FBF7F0",
+  champagne: "#EFE3CD",
+  gold: "#B0842A",
+  goldSoft: "#D8B667",
+  maroon: "#6E1B2B",
+  emerald: "#1E5B49",
+  muted: "#8B8075",
+  line: "#E3D9C9",
+};
+const DISPLAY = '"Didot","Bodoni MT","Playfair Display",Georgia,"Times New Roman",serif';
+const BODY = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
+const MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+
+/* ----------------------------------------------------------------- parsing */
+const WEEKDAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
+const FIELD_RE = /^(Type|Format|HOOK|CAPTION|HASHTAGS|AI VISUAL|VISUAL|SCRIPT|TEXT ON SCREEN|SLIDE\s+\d+)\s*:\s*(.*)$/i;
+const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+
+function tidy(lines) {
+  const out = [...lines];
+  while (out.length && !out[0].trim()) out.shift();
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  return out.join("\n");
+}
+
+function parseFields(raw) {
+  const f = { slides: [], other: [] };
+  let key = null;
+  let buf = [];
+  const flush = () => {
+    if (!key) return;
+    const value = tidy(buf);
+    if (key === "slide") { if (value) f.slides.push(value); }
+    else f[key] = value;
+    buf = [];
+  };
+  const map = {
+    "type": "type", "format": "format", "hook": "hook", "caption": "caption",
+    "hashtags": "hashtags", "ai visual": "visual", "visual": "visual",
+    "script": "script", "text on screen": "screenText",
+  };
+  for (const line of raw) {
+    if (line.trim() === "---") continue;
+    const m = line.match(FIELD_RE);
+    if (m) {
+      flush();
+      const label = m[1].toLowerCase().replace(/\s+/g, " ");
+      key = label.startsWith("slide") ? "slide" : map[label];
+      buf = m[2] ? [m[2]] : [];
+      continue;
+    }
+    if (key) buf.push(line);
+    else if (line.trim()) f.other.push(line);
+  }
+  flush();
+  f.hook = (f.hook || "").replace(/^"|"$/g, "").trim();
+  f.tags = (f.hashtags || "").split(/\s+/).filter((t) => t.startsWith("#"));
+  return f;
+}
+
+function parsePlan(md) {
+  const lines = String(md).replace(/\r/g, "").split("\n");
+  let title = "";
+  const meta = [], days = [], posts = [], briefLines = [], appendix = [];
+  let mode = "head", day = null, post = null, section = null;
+
+  const closePost = () => {
+    if (!post) return;
+    post.fields = parseFields(post.raw);
+    delete post.raw;
+    posts.push(post);
+    post = null;
+  };
+
+  for (const line of lines) {
+    const h1 = line.match(/^#\s+(.*\S)\s*$/);
+    const h2 = line.match(/^##\s+(.*\S)\s*$/);
+    const h3 = line.match(/^###\s+(.*\S)\s*$/);
+
+    if (h3 && /post/i.test(h3[1])) {
+      closePost();
+      const m = h3[1].match(/POST\s*(\d+)\s*[—–-]?\s*(.*)$/i);
+      post = {
+        number: m ? Number(m[1]) : posts.length + 1,
+        slot: m && m[2] ? m[2].trim() : "",
+        dayId: day ? day.id : "unscheduled",
+        dayLabel: day ? day.label : "Unscheduled",
+        theme: day ? day.theme : "",
+        raw: [],
+      };
+      post.id = `${post.dayId}-p${post.number}`;
+      if (day) day.postIds.push(post.id);
+      mode = "post";
+      continue;
+    }
+    if (h1) {
+      const text = h1[1];
+      const first = text.split(/[\s—–-]/)[0].toUpperCase();
+      if (WEEKDAYS.includes(first)) {
+        closePost();
+        day = { id: slugify(text), label: text, theme: "", postIds: [] };
+        days.push(day);
+        mode = "day";
+        continue;
+      }
+      if (!posts.length && !post && !title) { title = text; mode = "head"; continue; }
+      closePost();
+      section = { heading: text, lines: [] };
+      if (posts.length) { appendix.push(section); mode = "appendix"; }
+      else { briefLines.push(`## ${text}`); mode = "brief"; }
+      continue;
+    }
+    if (h2) {
+      const text = h2[1];
+      if (mode === "day" && /^theme\s*:/i.test(text)) {
+        day.theme = text.replace(/^theme\s*:\s*/i, "").replace(/^"|"$/g, "");
+        continue;
+      }
+      if (mode === "head") {
+        if (/^[A-Za-z][A-Za-z ]*:/.test(text)) { meta.push(text); continue; }
+        mode = "brief"; briefLines.push(`## ${text}`); continue;
+      }
+    }
+    if (mode === "post" && post) post.raw.push(line);
+    else if (mode === "appendix" && section) section.lines.push(line);
+    else if (mode === "brief") briefLines.push(line);
+  }
+  closePost();
+
+  const brief = tidy(briefLines.filter((l) => l.trim() !== "---"));
+  const brandLine = brief.match(/Brand:\s*\n\s*(.+)/);
+  const posLine = brief.match(/Positioning:\s*\n\s*(.+)/);
+  const siteLine = brief.match(/(https?:\/\/\S+)/);
+
+  return {
+    title: title || "Content plan",
+    meta: meta.map((m) => {
+      const i = m.indexOf(":");
+      return { label: m.slice(0, i).trim(), value: m.slice(i + 1).trim() };
+    }),
+    brand: {
+      name: brandLine ? brandLine[1].trim() : (title || "Brand").split("—")[0].trim(),
+      tagline: posLine ? posLine[1].trim() : "",
+      site: siteLine ? siteLine[1].trim() : "",
+    },
+    brief,
+    appendix: appendix.map((s) => ({ heading: s.heading, body: tidy(s.lines.filter((l) => l.trim() !== "---")) })),
+    days, posts,
+    uploadedAt: new Date().toISOString(),
+  };
+}
+
+
+/* ------------------------------------------------------------------- utils */
+const slotTime = (slot) => (/even|night|pm/i.test(slot) ? "6:30 PM" : "8:00 AM");
+const dayShort = (label) => {
+  const m = label.match(/^([A-Z]+)\s*[—–-]\s*(.*)$/i);
+  if (!m) return label;
+  const d = m[1][0] + m[1].slice(1, 3).toLowerCase();
+  return `${d} ${m[2].replace(/\s*SEPTEMBER/i, " Sep").replace(/\s*OCTOBER/i, " Oct").replace(/\s*AUGUST/i, " Aug")}`;
+};
+const initials = (name) => name.split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
+
+function RichText({ text, tags = [], clamp = 0, expanded, onExpand, tagColor = "#00376B" }) {
+  const full = [text, tags.join(" ")].filter(Boolean).join("\n\n");
+  const short = clamp && !expanded && full.length > clamp ? full.slice(0, clamp).trimEnd() : full;
+  const truncated = short.length < full.length;
+  return (
+    <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+      {short.split(/(\s+)/).map((tok, i) =>
+        tok.startsWith("#") || tok.startsWith("@")
+          ? <span key={i} style={{ color: tagColor }}>{tok}</span>
+          : <span key={i}>{tok}</span>
+      )}
+      {truncated && (
+        <>
+          <span style={{ color: T.muted }}>… </span>
+          <button onClick={onExpand} style={{ color: T.muted, fontFamily: BODY }} className="underline">more</button>
+        </>
+      )}
+    </span>
+  );
+}
+
+function Avatar({ name, ring, square }) {
+  return (
+    <div
+      className="flex items-center justify-center shrink-0"
+      style={{
+        width: 38, height: 38, borderRadius: square ? 8 : 999,
+        background: `linear-gradient(135deg, ${T.maroon}, ${T.gold})`,
+        color: "#fff", fontFamily: DISPLAY, fontSize: 15, letterSpacing: "0.04em",
+        boxShadow: ring ? `0 0 0 2px #fff, 0 0 0 3.5px ${T.goldSoft}` : "none",
+      }}
+    >
+      {initials(name)}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ media canvas */
+function Media({ post, img, ratio, adminSlot }) {
+  const slides = post.fields.slides || [];
+  const [i, setI] = useState(0);
+  const has = slides.length > 1;
+  useEffect(() => setI(0), [post.id]);
+  return (
+    <div className="relative w-full overflow-hidden" style={{ aspectRatio: ratio, background: T.champagne }}>
+      {img
+        ? <img src={img} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
+        : (
+          <div className="absolute inset-0 flex flex-col justify-center p-6" style={{ background: `linear-gradient(160deg, ${T.champagne}, #F7EFE1)` }}>
+            <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.18em", color: T.gold }}>IMAGE PENDING</div>
+            <div className="mt-3" style={{ fontFamily: DISPLAY, fontSize: 17, lineHeight: 1.3, color: T.ink }}>
+              {post.fields.hook || post.theme || "Visual to come"}
+            </div>
+            {post.fields.visual && (
+              <div className="mt-3" style={{ fontFamily: BODY, fontSize: 11, lineHeight: 1.5, color: T.muted }}>
+                {post.fields.visual.slice(0, 180)}
+              </div>
+            )}
+          </div>
+        )}
+
+      {has && (
+        <>
+          <div className="absolute inset-x-0 bottom-0 p-4" style={{ background: "linear-gradient(transparent, rgba(0,0,0,0.62))" }}>
+            <div style={{ fontFamily: DISPLAY, color: "#fff", fontSize: 18, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
+              {slides[i]}
+            </div>
+          </div>
+          <button onClick={() => setI((v) => Math.max(0, v - 1))} className="absolute left-1 top-1/2 p-1 rounded-full" style={{ background: "rgba(255,255,255,0.85)", transform: "translateY(-50%)" }}>
+            <ChevronLeft size={16} color={T.ink} />
+          </button>
+          <button onClick={() => setI((v) => Math.min(slides.length - 1, v + 1))} className="absolute right-1 top-1/2 p-1 rounded-full" style={{ background: "rgba(255,255,255,0.85)", transform: "translateY(-50%)" }}>
+            <ChevronRight size={16} color={T.ink} />
+          </button>
+          <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full" style={{ background: "rgba(0,0,0,0.6)", color: "#fff", fontFamily: MONO, fontSize: 10 }}>
+            {i + 1}/{slides.length}
+          </div>
+        </>
+      )}
+      {adminSlot}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------- previews */
+function IgPreview({ post, brand, img, expanded, onExpand }) {
+  return (
+    <div style={{ background: "#fff", fontFamily: BODY, color: "#000" }}>
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <Avatar name={brand.name} ring />
+        <div className="min-w-0 flex-1">
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{brand.handle}</div>
+          <div style={{ fontSize: 11, color: "#555" }}>{brand.city}</div>
+        </div>
+        <MoreHorizontal size={18} />
+      </div>
+      <Media post={post} img={img} ratio="4 / 5" />
+      <div className="flex items-center gap-4 px-3 pt-3">
+        <Heart size={23} /><MessageCircle size={22} /><Send size={21} />
+        <div className="flex-1" /><Bookmark size={22} />
+      </div>
+      <div className="px-3 pt-2 pb-4" style={{ fontSize: 13, lineHeight: 1.45 }}>
+        <span style={{ fontWeight: 600 }}>{brand.handle} </span>
+        <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 170} expanded={expanded} onExpand={onExpand} />
+        <div className="mt-2" style={{ fontSize: 11, color: "#8E8E8E", fontFamily: MONO, letterSpacing: "0.04em" }}>
+          {dayShort(post.dayLabel).toUpperCase()} · {slotTime(post.slot)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FbPreview({ post, brand, img, expanded, onExpand }) {
+  return (
+    <div style={{ background: "#fff", fontFamily: BODY, color: "#050505" }}>
+      <div className="flex items-center gap-3 px-3 pt-3 pb-2">
+        <Avatar name={brand.name} />
+        <div className="min-w-0 flex-1">
+          <div style={{ fontSize: 14, fontWeight: 600 }}>{brand.name}</div>
+          <div className="flex items-center gap-1" style={{ fontSize: 11, color: "#65676B" }}>
+            {dayShort(post.dayLabel)} at {slotTime(post.slot)} · <Globe size={11} />
+          </div>
+        </div>
+        <MoreHorizontal size={18} color="#65676B" />
+      </div>
+      <div className="px-3 pb-2" style={{ fontSize: 14, lineHeight: 1.5 }}>
+        <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 220} expanded={expanded} onExpand={onExpand} tagColor="#1B74E4" />
+      </div>
+      <Media post={post} img={img} ratio="4 / 5" />
+      <div className="flex items-center justify-around py-2 mt-1" style={{ borderTop: "1px solid #E4E6EB", color: "#65676B", fontSize: 13 }}>
+        <span className="flex items-center gap-1.5"><ThumbsUp size={17} /> Like</span>
+        <span className="flex items-center gap-1.5"><MessageCircle size={17} /> Comment</span>
+        <span className="flex items-center gap-1.5"><Share2 size={17} /> Share</span>
+      </div>
+    </div>
+  );
+}
+
+function LiPreview({ post, brand, img, expanded, onExpand }) {
+  return (
+    <div style={{ background: "#fff", fontFamily: BODY, color: "#000000E6" }}>
+      <div className="flex items-start gap-2.5 px-3 pt-3 pb-2">
+        <Avatar name={brand.name} />
+        <div className="min-w-0 flex-1">
+          <div style={{ fontSize: 14, fontWeight: 600 }}>{brand.name}</div>
+          <div style={{ fontSize: 11, color: "#00000099" }}>{brand.tagline || "Jewellery store"}</div>
+          <div className="flex items-center gap-1" style={{ fontSize: 11, color: "#00000099" }}>1d · <Globe size={11} /></div>
+        </div>
+        <MoreHorizontal size={18} color="#00000099" />
+      </div>
+      <div className="px-3 pb-3" style={{ fontSize: 14, lineHeight: 1.5 }}>
+        <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 200} expanded={expanded} onExpand={onExpand} tagColor="#0A66C2" />
+      </div>
+      <Media post={post} img={img} ratio="1 / 1" />
+      <div className="flex items-center justify-around py-2" style={{ borderTop: "1px solid #E9E5DF", color: "#00000099", fontSize: 13 }}>
+        <span className="flex items-center gap-1.5"><ThumbsUp size={17} /> Like</span>
+        <span className="flex items-center gap-1.5"><MessageCircle size={17} /> Comment</span>
+        <span className="flex items-center gap-1.5"><Repeat2 size={17} /> Repost</span>
+        <span className="flex items-center gap-1.5"><Send size={17} /> Send</span>
+      </div>
+    </div>
+  );
+}
+
+function PinPreview({ post, brand, img }) {
+  const desc = (post.fields.caption || "").split("\n").filter(Boolean).slice(0, 2).join(" ");
+  return (
+    <div style={{ background: "#fff", fontFamily: BODY, color: "#111" }} className="p-3">
+      <div className="relative overflow-hidden" style={{ borderRadius: 16 }}>
+        <Media post={post} img={img} ratio="2 / 3" />
+        <div className="absolute top-2 right-2 px-3 py-1.5 rounded-full" style={{ background: "#E60023", color: "#fff", fontSize: 12, fontWeight: 700 }}>
+          Save
+        </div>
+      </div>
+      <div className="pt-3" style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.3 }}>
+        {post.fields.hook || post.theme}
+      </div>
+      <div className="pt-1" style={{ fontSize: 12, color: "#5F5F5F", lineHeight: 1.45 }}>{desc}</div>
+      <div className="flex items-center gap-2 pt-3">
+        <div style={{ width: 26, height: 26, borderRadius: 999, background: `linear-gradient(135deg,${T.maroon},${T.gold})`, color: "#fff", fontSize: 10, fontFamily: DISPLAY }} className="flex items-center justify-center">
+          {initials(brand.name)}
+        </div>
+        <div style={{ fontSize: 12 }}>{brand.name}</div>
+      </div>
+      <div className="pt-2" style={{ fontSize: 11, color: "#767676" }}>{post.fields.tags.slice(0, 6).join(" ")}</div>
+    </div>
+  );
+}
+
+const PLATFORMS = [
+  { id: "instagram", label: "Instagram", Icon: Instagram, C: IgPreview },
+  { id: "facebook", label: "Facebook", Icon: Facebook, C: FbPreview },
+  { id: "linkedin", label: "LinkedIn", Icon: Linkedin, C: LiPreview },
+  { id: "pinterest", label: "Pinterest", Icon: CircleDot, C: PinPreview },
+];
+
+/* ------------------------------------------------------------------ pieces */
+function Chip({ children, tone = "neutral", onClick, active }) {
+  const tones = {
+    neutral: { bg: "transparent", fg: T.muted, bd: T.line },
+    gold: { bg: "#FBF3E2", fg: T.gold, bd: "#EBD9B4" },
+    green: { bg: "#E9F2EE", fg: T.emerald, bd: "#C9E0D7" },
+    maroon: { bg: "#F7E9EC", fg: T.maroon, bd: "#EBCFD5" },
+  };
+  const t = tones[tone] || tones.neutral;
+  return (
+    <button
+      onClick={onClick}
+      disabled={!onClick}
+      className="px-2.5 py-1 rounded-full"
+      style={{
+        background: active ? T.ink : t.bg, color: active ? T.ivory : t.fg,
+        border: `1px solid ${active ? T.ink : t.bd}`,
+        fontFamily: MONO, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Section({ label, children, right }) {
+  return (
+    <div className="mt-5">
+      <div className="flex items-center justify-between mb-2">
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>{label}</div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/* --------------------------------------------------------------------- app */
+export default function Portal() {
+  const [ready, setReady] = useState(false);
+  const [plan, setPlan] = useState(null);
+  const [images, setImages] = useState({});
+  const [feedback, setFeedback] = useState({});
+  const [loadError, setLoadError] = useState("");
+  const [me, setMe] = useState({ name: "", role: "client" });
+  const [platform, setPlatform] = useState("instagram");
+  const [selected, setSelected] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+  const [tab, setTab] = useState("posts");
+  const [toast, setToast] = useState("");
+  const [pinPrompt, setPinPrompt] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const fileRef = useRef(null);
+  const imgRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { plan: p, images: im, feedback: fb } = await api.loadAll();
+        if (p) { setPlan(p); if (p.posts.length) setSelected(p.posts[0].id); }
+        if (im) setImages(im);
+        if (fb) setFeedback(fb);
+      } catch (e) {
+        setLoadError("Could not reach the server. Reload to try again.");
+      }
+      setMe({ name: api.localName(), role: api.savedPass() ? "admin" : "client" });
+      setReady(true);
+    })();
+  }, []);
+
+  const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2600); };
+  const isAdmin = me.role === "admin";
+  const post = useMemo(() => (plan ? plan.posts.find((p) => p.id === selected) : null), [plan, selected]);
+  const brand = useMemo(() => {
+    const b = plan ? plan.brand : { name: "Brand", tagline: "", site: "" };
+    const city = plan ? (plan.meta.find((m) => /location/i.test(m.label)) || {}).value || "" : "";
+    return { ...b, handle: b.name.toLowerCase().replace(/[^a-z0-9]/g, ""), city: city.split(",").slice(0, 2).join(", ") };
+  }, [plan]);
+
+  const fbFor = (id) => feedback[id] || { status: "pending", comments: [] };
+  const openCount = useMemo(
+    () => Object.values(feedback).reduce((n, f) => n + (f.comments || []).filter((c) => !c.resolved).length, 0),
+    [feedback]
+  );
+
+  async function saveFeedback(id, mut) {
+    const entry = fbFor(id);
+    const next = mut({ ...entry, comments: [...(entry.comments || [])] });
+    setFeedback((f) => ({ ...f, [id]: next }));
+    try {
+      const res = await api.saveEntry(id, next);
+      if (res.feedback) setFeedback(res.feedback);
+    } catch (e) {
+      flash("Could not save that note. Check your connection and try again.");
+    }
+  }
+
+  async function publish(text) {
+    let parsed;
+    try { parsed = parsePlan(text); } catch (e) { flash("That file could not be read as a content plan."); return; }
+    if (!parsed.posts.length) { flash("No posts found. Headings need to look like ### POST 1 — MORNING."); return; }
+    try {
+      await api.savePlan(parsed);
+      setPlan(parsed);
+      setSelected(parsed.posts[0].id);
+      setTab("posts");
+      flash(`Published ${parsed.posts.length} posts across ${parsed.days.length} days.`);
+    } catch (e) {
+      flash(e.message.includes("401") || /passcode/i.test(e.message) ? "Admin passcode rejected. Unlock again." : "Publishing failed. Try again.");
+    }
+  }
+
+  async function attachImage(file, postId) {
+    try {
+      const dataUrl = await compress(file);
+      const res = await api.saveImage(postId, dataUrl);
+      setImages(res.images || { ...images, [postId]: dataUrl });
+      flash("Image added.");
+    } catch (e) {
+      flash("Image upload failed. Try a smaller file.");
+    }
+  }
+
+  async function removeImage(postId) {
+    try {
+      const res = await api.deleteImage(postId);
+      setImages(res.images || {});
+    } catch (e) {
+      flash("Could not remove that image.");
+    }
+  }
+
+  function setName(name) {
+    setMe((m) => ({ ...m, name }));
+    api.setLocalName(name);
+  }
+
+  function enterAdmin() { setPinPrompt(true); }
+
+  async function submitPin() {
+    try {
+      const res = await api.login(pinInput);
+      if (!res.ok) { flash("That passcode does not match."); return; }
+      api.setSavedPass(pinInput);
+      setMe((m) => ({ ...m, role: "admin" }));
+      setPinPrompt(false);
+      setPinInput("");
+    } catch (e) {
+      flash("That passcode does not match, or the site has no ADMIN_PASSCODE set.");
+    }
+  }
+
+  const digest = () => {
+    if (!plan) return "";
+    const lines = [`# Feedback — ${plan.title}`, ""];
+    for (const p of plan.posts) {
+      const f = fbFor(p.id);
+      const open = (f.comments || []).filter((c) => !c.resolved);
+      if (f.status === "pending" && !open.length) continue;
+      lines.push(`## Post ${p.number} — ${dayShort(p.dayLabel)} ${p.slot} [${f.status}]`);
+      for (const c of open) lines.push(`- (${c.kind}) ${c.author}: ${c.text}`);
+      lines.push("");
+    }
+    return lines.join("\n");
+  };
+
+  const copy = async (text, msg) => {
+    try { await navigator.clipboard.writeText(text); flash(msg); }
+    catch (e) { flash("Copy blocked by the browser. Select the text instead."); }
+  };
+
+  if (!ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: T.ivory }}>
+        <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.2em", color: T.gold }}>LOADING</div>
+      </div>
+    );
+  }
+
+  const Preview = PLATFORMS.find((p) => p.id === platform).C;
+
+  return (
+    <div className="min-h-screen" style={{ background: T.ivory, fontFamily: BODY, color: T.ink }}>
+      {/* header */}
+      <div style={{ background: T.charcoal, color: T.ivory }}>
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.22em", color: T.goldSoft }}>CONTENT REVIEW</div>
+            <div className="truncate" style={{ fontFamily: DISPLAY, fontSize: 19, letterSpacing: "0.01em" }}>
+              {plan ? plan.brand.name : "Client portal"}
+            </div>
+          </div>
+          <button
+            onClick={() => (isAdmin ? (api.clearSavedPass(), setMe((m) => ({ ...m, role: "client" }))) : enterAdmin())}
+            className="px-3 py-1.5 rounded-full flex items-center gap-1.5"
+            style={{ border: `1px solid ${T.goldSoft}`, color: T.goldSoft, fontFamily: MONO, fontSize: 10, letterSpacing: "0.12em" }}
+          >
+            <Lock size={11} />{isAdmin ? "ADMIN" : "CLIENT"}
+          </button>
+        </div>
+      </div>
+
+      {/* passcode sheet */}
+      {pinPrompt && (
+        <div className="fixed inset-0 z-30 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(27,23,20,0.55)" }}>
+          <div className="w-full max-w-sm p-5 rounded-2xl" style={{ background: T.ivory }}>
+            <div style={{ fontFamily: DISPLAY, fontSize: 20 }}>Enter admin passcode</div>
+            <p className="mt-2" style={{ fontSize: 12, color: T.muted, lineHeight: 1.5 }}>
+              Set as ADMIN_PASSCODE in your Netlify site settings. Uploads are checked on the server.
+            </p>
+            <input
+              value={pinInput} onChange={(e) => setPinInput(e.target.value)} type="password"
+              className="w-full mt-3 px-3 py-2 rounded-lg" style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 14 }}
+            />
+            <div className="flex gap-2 mt-3">
+              <button onClick={submitPin} className="flex-1 py-2 rounded-lg" style={{ background: T.ink, color: T.ivory, fontSize: 13 }}>
+                Unlock
+              </button>
+              <button onClick={() => { setPinPrompt(false); setPinInput(""); }} className="px-4 py-2 rounded-lg" style={{ border: `1px solid ${T.line}`, fontSize: 13 }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* tabs */}
+      <div className="max-w-6xl mx-auto px-4 pt-4 flex items-center gap-2 flex-wrap">
+        {[["posts", "Posts"], ["brief", "Brief"], isAdmin ? ["upload", "Upload"] : null, isAdmin ? ["digest", `Feedback${openCount ? ` (${openCount})` : ""}`] : null]
+          .filter(Boolean)
+          .map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)} className="pb-1"
+              style={{
+                fontFamily: MONO, fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase",
+                color: tab === id ? T.ink : T.muted, borderBottom: `2px solid ${tab === id ? T.gold : "transparent"}`,
+              }}>
+              {label}
+            </button>
+          ))}
+      </div>
+
+      {loadError && (
+        <div className="max-w-6xl mx-auto px-4 pt-4" style={{ fontSize: 13, color: T.maroon }}>{loadError}</div>
+      )}
+
+      {!plan && (
+        <div className="max-w-6xl mx-auto px-4 py-16 text-center">
+          <div style={{ fontFamily: DISPLAY, fontSize: 24 }}>Nothing published yet</div>
+          <p className="mt-2" style={{ fontSize: 13, color: T.muted }}>
+            {isAdmin ? "Open Upload and drop in a content plan." : "Your content plan will appear here once it is published."}
+          </p>
+        </div>
+      )}
+
+      {/* ---------------------------------------------------------- posts */}
+      {plan && tab === "posts" && (
+        <div className="max-w-6xl mx-auto px-4 py-4 grid gap-6" style={{ gridTemplateColumns: "1fr" }}>
+          <div className="lg:grid lg:gap-8" style={{ display: "grid", gridTemplateColumns: "1fr" }}>
+            {/* schedule rail */}
+            <div className="overflow-x-auto -mx-4 px-4 pb-2">
+              <div className="flex gap-2" style={{ minWidth: "min-content" }}>
+                {plan.posts.map((p) => {
+                  const f = fbFor(p.id);
+                  const on = p.id === selected;
+                  return (
+                    <button key={p.id} onClick={() => { setSelected(p.id); setExpanded(false); }}
+                      className="text-left px-3 py-2 rounded-xl shrink-0"
+                      style={{
+                        width: 156, background: on ? T.ink : "#fff", color: on ? T.ivory : T.ink,
+                        border: `1px solid ${on ? T.ink : T.line}`,
+                      }}>
+                      <div className="flex items-center justify-between">
+                        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.14em", color: on ? T.goldSoft : T.gold }}>
+                          {dayShort(p.dayLabel).toUpperCase()}
+                        </span>
+                        <span style={{ width: 7, height: 7, borderRadius: 999, background: f.status === "approved" ? T.emerald : f.status === "changes" ? T.maroon : (on ? "#5A5048" : T.line) }} />
+                      </div>
+                      <div className="mt-1 truncate" style={{ fontFamily: DISPLAY, fontSize: 14 }}>{p.fields.hook || p.theme}</div>
+                      <div style={{ fontFamily: MONO, fontSize: 9, color: on ? "#B9AFA4" : T.muted, letterSpacing: "0.08em" }}>
+                        POST {p.number} · {slotTime(p.slot)}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {post && (
+              <div className="grid gap-6 mt-2" style={{ gridTemplateColumns: "1fr" }}>
+                {/* platform picker */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {PLATFORMS.map(({ id, label, Icon }) => (
+                    <button key={id} onClick={() => setPlatform(id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+                      style={{
+                        background: platform === id ? T.ink : "#fff", color: platform === id ? T.ivory : T.muted,
+                        border: `1px solid ${platform === id ? T.ink : T.line}`, fontSize: 12,
+                      }}>
+                      <Icon size={13} />{label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* the mirror */}
+                <div className="mx-auto w-full" style={{ maxWidth: 420 }}>
+                  <div className="overflow-hidden" style={{ borderRadius: 22, border: `1px solid ${T.line}`, boxShadow: "0 18px 40px -28px rgba(27,23,20,0.5)" }}>
+                    <Preview post={post} brand={brand} img={images[post.id]} expanded={expanded} onExpand={() => setExpanded(true)} />
+                  </div>
+
+                  {isAdmin && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <input ref={imgRef} type="file" accept="image/*" className="hidden"
+                        onChange={(e) => { const f = e.target.files[0]; if (f) attachImage(f, post.id); e.target.value = ""; }} />
+                      <button onClick={() => imgRef.current && imgRef.current.click()}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+                        style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 12 }}>
+                        <ImageIcon size={13} />{images[post.id] ? "Replace image" : "Add image"}
+                      </button>
+                      {images[post.id] && (
+                        <button onClick={() => removeImage(post.id)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+                          style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 12, color: T.maroon }}>
+                          <Trash2 size={13} />Remove
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* details + notes */}
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Chip tone="gold">Post {post.number}</Chip>
+                    {post.slot && <Chip>{post.slot}</Chip>}
+                    {post.fields.type && <Chip>{post.fields.type}</Chip>}
+                    {post.fields.format && <Chip>{post.fields.format}</Chip>}
+                  </div>
+                  <div className="mt-3" style={{ fontFamily: DISPLAY, fontSize: 22, lineHeight: 1.25 }}>{post.theme}</div>
+
+                  <Section label="CAPTION" right={
+                    <button onClick={() => copy([post.fields.caption, post.fields.tags.join(" ")].filter(Boolean).join("\n\n"), "Caption copied.")}
+                      className="flex items-center gap-1" style={{ fontSize: 11, color: T.muted }}>
+                      <Copy size={12} />Copy
+                    </button>
+                  }>
+                    <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{post.fields.caption}</div>
+                  </Section>
+
+                  {post.fields.script && (
+                    <Section label="SCRIPT">
+                      <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{post.fields.script}</div>
+                    </Section>
+                  )}
+                  {post.fields.screenText && (
+                    <Section label="ON-SCREEN TEXT">
+                      <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{post.fields.screenText}</div>
+                    </Section>
+                  )}
+                  {post.fields.slides.length > 0 && (
+                    <Section label={`SLIDES (${post.fields.slides.length})`}>
+                      <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))" }}>
+                        {post.fields.slides.map((s, i) => (
+                          <div key={i} className="p-3 rounded-xl" style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                            <span style={{ fontFamily: MONO, fontSize: 9, color: T.gold }}>{String(i + 1).padStart(2, "0")}</span>
+                            <div className="mt-1">{s}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </Section>
+                  )}
+                  {post.fields.tags.length > 0 && (
+                    <Section label={`HASHTAGS (${post.fields.tags.length})`} right={
+                      <button onClick={() => copy(post.fields.tags.join(" "), "Hashtags copied.")} className="flex items-center gap-1" style={{ fontSize: 11, color: T.muted }}>
+                        <Copy size={12} />Copy
+                      </button>
+                    }>
+                      <div className="flex flex-wrap gap-1.5">
+                        {post.fields.tags.map((t) => (
+                          <span key={t} className="px-2 py-0.5 rounded-full" style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 11, color: T.muted }}>{t}</span>
+                        ))}
+                      </div>
+                    </Section>
+                  )}
+                  {post.fields.visual && (
+                    <Section label="IMAGE BRIEF" right={
+                      <button onClick={() => copy(post.fields.visual, "Image brief copied.")} className="flex items-center gap-1" style={{ fontSize: 11, color: T.muted }}>
+                        <Copy size={12} />Copy
+                      </button>
+                    }>
+                      <div className="p-3 rounded-xl" style={{ background: "#fff", border: `1px dashed ${T.line}`, fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", color: T.muted }}>
+                        {post.fields.visual}
+                      </div>
+                    </Section>
+                  )}
+
+                  <NotesPanel
+                    post={post} entry={fbFor(post.id)} me={me} setName={setName} isAdmin={isAdmin}
+                    onStatus={(status) => saveFeedback(post.id, (e) => ({ ...e, status }))}
+                    onAdd={(c) => saveFeedback(post.id, (e) => ({ ...e, comments: [...e.comments, c] }))}
+                    onToggle={(cid) => saveFeedback(post.id, (e) => ({ ...e, comments: e.comments.map((c) => (c.id === cid ? { ...c, resolved: !c.resolved } : c)) }))}
+                    onDelete={(cid) => saveFeedback(post.id, (e) => ({ ...e, comments: e.comments.filter((c) => c.id !== cid) }))}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---------------------------------------------------------- brief */}
+      {plan && tab === "brief" && (
+        <div className="max-w-3xl mx-auto px-4 py-5">
+          <div style={{ fontFamily: DISPLAY, fontSize: 26, lineHeight: 1.2 }}>{plan.title}</div>
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {plan.meta.map((m) => <Chip key={m.label} tone="gold">{m.label}: {m.value}</Chip>)}
+          </div>
+          <div className="mt-5 p-4 rounded-2xl" style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+            {plan.brief.replace(/^##\s+/gm, "")}
+          </div>
+          {plan.appendix.map((a) => (
+            <div key={a.heading} className="mt-4">
+              <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>{a.heading}</div>
+              <div className="mt-2 p-4 rounded-2xl" style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                {a.body}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* --------------------------------------------------------- upload */}
+      {isAdmin && tab === "upload" && <UploadPanel onPublish={publish} fileRef={fileRef} plan={plan} images={images} onBulk={attachImage} />}
+
+      {/* --------------------------------------------------------- digest */}
+      {isAdmin && tab === "digest" && plan && (
+        <div className="max-w-3xl mx-auto px-4 py-5">
+          <div className="flex items-center justify-between">
+            <div style={{ fontFamily: DISPLAY, fontSize: 22 }}>Client feedback</div>
+            <button onClick={() => copy(digest(), "Feedback copied as markdown.")} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+              style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 12 }}>
+              <ClipboardList size={13} />Copy all
+            </button>
+          </div>
+          {plan.posts.map((p) => {
+            const f = fbFor(p.id);
+            const open = (f.comments || []).filter((c) => !c.resolved);
+            if (f.status === "pending" && !open.length) return null;
+            return (
+              <div key={p.id} className="mt-3 p-4 rounded-2xl" style={{ background: "#fff", border: `1px solid ${T.line}` }}>
+                <div className="flex items-center justify-between gap-2">
+                  <button onClick={() => { setSelected(p.id); setTab("posts"); }} style={{ fontFamily: DISPLAY, fontSize: 16, textAlign: "left" }}>
+                    Post {p.number} · {dayShort(p.dayLabel)}
+                  </button>
+                  <Chip tone={f.status === "approved" ? "green" : f.status === "changes" ? "maroon" : "neutral"}>{f.status}</Chip>
+                </div>
+                {open.map((c) => (
+                  <div key={c.id} className="mt-2" style={{ fontSize: 13, lineHeight: 1.5 }}>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: T.gold, letterSpacing: "0.1em" }}>{c.kind.toUpperCase()} </span>
+                    <span style={{ fontWeight: 600 }}>{c.author}: </span>{c.text}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {!openCount && <p className="mt-4" style={{ fontSize: 13, color: T.muted }}>No open notes. Everything is either untouched or resolved.</p>}
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed left-1/2 bottom-6 z-40 px-4 py-2.5 rounded-full" style={{ transform: "translateX(-50%)", background: T.ink, color: T.ivory, fontSize: 13, maxWidth: "90vw" }}>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ notes panel */
+const KINDS = ["Add", "Remove", "Change", "Note"];
+
+function NotesPanel({ post, entry, me, setName, isAdmin, onStatus, onAdd, onToggle, onDelete }) {
+  const [text, setText] = useState("");
+  const [kind, setKind] = useState("Change");
+  const [name, setNameLocal] = useState(me.name);
+  useEffect(() => setNameLocal(me.name), [me.name]);
+
+  const submit = () => {
+    const author = (name || "").trim() || "Client";
+    if (!text.trim()) return;
+    if (author !== me.name) setName(author);
+    onAdd({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, author, kind, text: text.trim(), ts: new Date().toISOString(), resolved: false, admin: isAdmin });
+    setText("");
+  };
+
+  return (
+    <Section label="NOTES ON THIS POST">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <Chip tone="green" active={entry.status === "approved"} onClick={() => onStatus(entry.status === "approved" ? "pending" : "approved")}>
+          Approve
+        </Chip>
+        <Chip tone="maroon" active={entry.status === "changes"} onClick={() => onStatus(entry.status === "changes" ? "pending" : "changes")}>
+          Needs changes
+        </Chip>
+      </div>
+
+      {(entry.comments || []).map((c) => (
+        <div key={c.id} className="p-3 rounded-xl mb-2" style={{ background: "#fff", border: `1px solid ${T.line}`, opacity: c.resolved ? 0.55 : 1 }}>
+          <div className="flex items-center gap-2">
+            <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.12em", color: c.kind === "Remove" ? T.maroon : T.gold }}>{c.kind.toUpperCase()}</span>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>{c.author}</span>
+            <span style={{ fontSize: 11, color: T.muted }}>{new Date(c.ts).toLocaleDateString()}</span>
+            <div className="flex-1" />
+            <button onClick={() => onToggle(c.id)} title={c.resolved ? "Reopen" : "Mark done"} style={{ color: c.resolved ? T.emerald : T.muted }}>
+              <Check size={15} />
+            </button>
+            <button onClick={() => onDelete(c.id)} title="Delete" style={{ color: T.muted }}><X size={15} /></button>
+          </div>
+          <div className="mt-1.5" style={{ fontSize: 13, lineHeight: 1.5, textDecoration: c.resolved ? "line-through" : "none" }}>{c.text}</div>
+        </div>
+      ))}
+
+      <div className="p-3 rounded-xl" style={{ background: "#fff", border: `1px solid ${T.line}` }}>
+        <div className="flex gap-1.5 mb-2 flex-wrap">
+          {KINDS.map((k) => <Chip key={k} active={kind === k} onClick={() => setKind(k)}>{k}</Chip>)}
+        </div>
+        <textarea
+          value={text} onChange={(e) => setText(e.target.value)} rows={3}
+          placeholder={kind === "Remove" ? "What should come out of this post?" : "What would you like changed?"}
+          className="w-full px-3 py-2 rounded-lg" style={{ border: `1px solid ${T.line}`, fontSize: 14, resize: "vertical" }}
+        />
+        <div className="flex items-center gap-2 mt-2">
+          <input value={name} onChange={(e) => setNameLocal(e.target.value)} placeholder="Your name"
+            className="px-3 py-2 rounded-lg flex-1 min-w-0" style={{ border: `1px solid ${T.line}`, fontSize: 13 }} />
+          <button onClick={submit} className="px-4 py-2 rounded-lg" style={{ background: T.ink, color: T.ivory, fontSize: 13 }}>Add note</button>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+/* ----------------------------------------------------------- upload panel */
+function UploadPanel({ onPublish, fileRef, plan, images, onBulk }) {
+  const [text, setText] = useState("");
+  const bulkRef = useRef(null);
+
+  const readFile = (file) => {
+    const r = new FileReader();
+    r.onload = () => setText(String(r.result));
+    r.readAsText(file);
+  };
+
+  const missing = plan ? plan.posts.filter((p) => !images[p.id]) : [];
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 py-5">
+      <div style={{ fontFamily: DISPLAY, fontSize: 22 }}>Upload a content plan</div>
+      <p className="mt-2" style={{ fontSize: 13, color: T.muted, lineHeight: 1.55 }}>
+        Markdown with day headings like <code>{"# MONDAY — 7 SEPTEMBER"}</code> and post headings like <code>{"### POST 1 — MORNING"}</code>.
+        Publishing replaces the plan. Notes stay attached to matching post numbers.
+      </p>
+
+      <div className="flex items-center gap-2 mt-3 flex-wrap">
+        <input ref={fileRef} type="file" accept=".md,.markdown,.txt" className="hidden"
+          onChange={(e) => { const f = e.target.files[0]; if (f) readFile(f); e.target.value = ""; }} />
+        <button onClick={() => fileRef.current && fileRef.current.click()} className="flex items-center gap-1.5 px-3 py-2 rounded-lg"
+          style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 13 }}>
+          <Upload size={14} />Choose .md file
+        </button>
+        <button onClick={() => onPublish(text)} className="px-4 py-2 rounded-lg" style={{ background: T.ink, color: T.ivory, fontSize: 13 }}>
+          Publish to client view
+        </button>
+      </div>
+
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={12}
+        placeholder="Or paste the markdown here"
+        className="w-full mt-3 px-3 py-3 rounded-xl" style={{ border: `1px solid ${T.line}`, fontFamily: MONO, fontSize: 12, lineHeight: 1.5, resize: "vertical" }} />
+
+      {plan && (
+        <div className="mt-6">
+          <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>IMAGES</div>
+          <p className="mt-2" style={{ fontSize: 13, color: T.muted }}>
+            {plan.posts.length - missing.length} of {plan.posts.length} posts have an image.
+            {missing.length > 0 && " Bulk upload fills the earliest empty posts in order."}
+          </p>
+          <input ref={bulkRef} type="file" accept="image/*" multiple className="hidden"
+            onChange={(e) => {
+              const files = Array.from(e.target.files || []);
+              files.forEach((f, i) => { if (missing[i]) onBulk(f, missing[i].id); });
+              e.target.value = "";
+            }} />
+          <button onClick={() => bulkRef.current && bulkRef.current.click()} className="flex items-center gap-1.5 px-3 py-2 rounded-lg mt-2"
+            style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 13 }}>
+            <ImageIcon size={14} />Add images in order
+          </button>
+          <div className="grid gap-2 mt-3" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(84px,1fr))" }}>
+            {plan.posts.map((p) => (
+              <div key={p.id} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${T.line}`, aspectRatio: "4 / 5", background: T.champagne }}>
+                {images[p.id]
+                  ? <img src={images[p.id]} alt="" className="w-full h-full" style={{ objectFit: "cover" }} />
+                  : <div className="w-full h-full flex items-center justify-center" style={{ fontFamily: MONO, fontSize: 10, color: T.gold }}>{p.number}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------- image compress */
+function compress(file, max = 1280, quality = 0.78) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = () => reject(new Error("bad image"));
+      img.src = String(reader.result);
+    };
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+}
