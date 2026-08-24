@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Upload, Instagram, Facebook, Linkedin, Heart, MessageCircle, Send, Bookmark,
   MoreHorizontal, ThumbsUp, Share2, Repeat2, Globe, Check, X, Copy, ChevronLeft,
-  ChevronRight, Lock, ClipboardList, Image as ImageIcon, Trash2, CircleDot,
+  ChevronRight, Lock, ClipboardList, Image as ImageIcon, Trash2, CircleDot, Pencil, Plus,
 } from "lucide-react";
 import * as api from "./api";
 
@@ -161,6 +161,7 @@ function parsePlan(md) {
     uploadedAt: new Date().toISOString(),
   };
 }
+
 
 
 /* ------------------------------------------------------------------- utils */
@@ -406,6 +407,103 @@ function Section({ label, children, right }) {
   );
 }
 
+/* ------------------------------------------------------------ post editing */
+const fieldsToDraft = (p) => ({
+  theme: p.theme || "",
+  type: p.fields.type || "",
+  format: p.fields.format || "",
+  hook: p.fields.hook || "",
+  caption: p.fields.caption || "",
+  hashtags: (p.fields.tags || []).join(" "),
+  script: p.fields.script || "",
+  screenText: p.fields.screenText || "",
+  visual: p.fields.visual || "",
+  slides: [...(p.fields.slides || [])],
+});
+
+const draftToFields = (d) => ({
+  type: d.type.trim(),
+  format: d.format.trim(),
+  hook: d.hook.trim(),
+  caption: d.caption,
+  script: d.script,
+  screenText: d.screenText,
+  visual: d.visual,
+  hashtags: d.hashtags.trim(),
+  tags: d.hashtags.split(/\s+/).filter((t) => t.startsWith("#")),
+  slides: d.slides.filter((x) => x.trim()),
+  other: [],
+});
+
+function Field({ label, value, onChange, rows = 3, mono }) {
+  return (
+    <label className="block mt-3">
+      <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.14em", color: T.gold }}>{label}</span>
+      {rows === 1 ? (
+        <input value={value} onChange={(e) => onChange(e.target.value)}
+          className="w-full mt-1 px-3 py-2 rounded-lg"
+          style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 14 }} />
+      ) : (
+        <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={rows}
+          className="w-full mt-1 px-3 py-2 rounded-lg"
+          style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 14, lineHeight: 1.55, resize: "vertical", fontFamily: mono ? MONO : BODY }} />
+      )}
+    </label>
+  );
+}
+
+function PostEditor({ draft, setDraft, onSave, onCancel, saving }) {
+  const set = (k) => (v) => setDraft((d) => ({ ...d, [k]: v }));
+  return (
+    <div className="p-4 rounded-2xl" style={{ background: "#fff", border: `1px solid ${T.line}` }}>
+      <div style={{ fontFamily: DISPLAY, fontSize: 18 }}>Edit post</div>
+      <p className="mt-1" style={{ fontSize: 12, color: T.muted }}>The preview above updates as you type. Nothing saves until you tap Save changes.</p>
+      <Field label="THEME" value={draft.theme} onChange={set("theme")} rows={1} />
+      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
+        <Field label="TYPE" value={draft.type} onChange={set("type")} rows={1} />
+        <Field label="FORMAT" value={draft.format} onChange={set("format")} rows={1} />
+      </div>
+      <Field label="HOOK" value={draft.hook} onChange={set("hook")} rows={2} />
+      <Field label="CAPTION" value={draft.caption} onChange={set("caption")} rows={10} />
+      <Field label="HASHTAGS" value={draft.hashtags} onChange={set("hashtags")} rows={3} mono />
+      <Field label="SCRIPT" value={draft.script} onChange={set("script")} rows={4} />
+      <Field label="ON-SCREEN TEXT" value={draft.screenText} onChange={set("screenText")} rows={3} />
+      <Field label="IMAGE BRIEF" value={draft.visual} onChange={set("visual")} rows={4} />
+
+      <div className="mt-4">
+        <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.14em", color: T.gold }}>SLIDES</span>
+        {draft.slides.map((sl, i) => (
+          <div key={i} className="flex gap-2 mt-2">
+            <textarea value={sl} rows={2}
+              onChange={(e) => setDraft((d) => ({ ...d, slides: d.slides.map((x, j) => (j === i ? e.target.value : x)) }))}
+              className="flex-1 px-3 py-2 rounded-lg"
+              style={{ border: `1px solid ${T.line}`, fontSize: 13, resize: "vertical" }} />
+            <button onClick={() => setDraft((d) => ({ ...d, slides: d.slides.filter((_, j) => j !== i) }))}
+              className="px-2 rounded-lg" style={{ border: `1px solid ${T.line}`, color: T.maroon }} title="Remove slide">
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+        <button onClick={() => setDraft((d) => ({ ...d, slides: [...d.slides, ""] }))}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full mt-2"
+          style={{ border: `1px solid ${T.line}`, fontSize: 12 }}>
+          <Plus size={13} />Add slide
+        </button>
+      </div>
+
+      <div className="flex gap-2 mt-5">
+        <button onClick={onSave} disabled={saving} className="px-4 py-2 rounded-lg"
+          style={{ background: T.ink, color: T.ivory, fontSize: 13, opacity: saving ? 0.6 : 1 }}>
+          {saving ? "Saving" : "Save changes"}
+        </button>
+        <button onClick={onCancel} className="px-4 py-2 rounded-lg" style={{ border: `1px solid ${T.line}`, fontSize: 13 }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------------------------------------------------- app */
 export default function Portal() {
   const [ready, setReady] = useState(false);
@@ -413,6 +511,9 @@ export default function Portal() {
   const [images, setImages] = useState({});
   const [feedback, setFeedback] = useState({});
   const [loadError, setLoadError] = useState("");
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
   const [me, setMe] = useState({ name: "", role: "client" });
   const [platform, setPlatform] = useState("instagram");
   const [selected, setSelected] = useState(null);
@@ -477,7 +578,7 @@ export default function Portal() {
       setTab("posts");
       flash(`Published ${parsed.posts.length} posts across ${parsed.days.length} days.`);
     } catch (e) {
-      flash(e.message.includes("401") || /passcode/i.test(e.message) ? "Admin passcode rejected. Unlock again." : "Publishing failed. Try again.");
+      flash(/passcode|401/i.test(e.message) ? "Admin passcode rejected. Unlock again." : "Publishing failed. Try again.");
     }
   }
 
@@ -518,6 +619,50 @@ export default function Portal() {
       setPinInput("");
     } catch (e) {
       flash("That passcode does not match, or the site has no ADMIN_PASSCODE set.");
+    }
+  }
+
+  const shown = draft && post ? { ...post, theme: draft.theme, fields: draftToFields(draft) } : post;
+
+  async function saveEdit() {
+    if (!post || !draft) return;
+    setSaving(true);
+    try {
+      const res = await api.updatePost(post.id, draftToFields(draft), draft.theme);
+      if (res.plan) setPlan(res.plan);
+      setDraft(null);
+      flash("Post updated.");
+    } catch (e) {
+      flash(/passcode|401/i.test(e.message) ? "Admin passcode rejected. Unlock again." : "Could not save the post.");
+    }
+    setSaving(false);
+  }
+
+  async function removePost(postId) {
+    setConfirmDel(false);
+    try {
+      const res = await api.deletePost(postId);
+      if (res.plan) {
+        setPlan(res.plan);
+        if (selected === postId) setSelected(res.plan.posts.length ? res.plan.posts[0].id : null);
+      }
+      setImages(res.images || {});
+      setFeedback(res.feedback || {});
+      setDraft(null);
+      flash("Post removed.");
+    } catch (e) {
+      flash(/passcode|401/i.test(e.message) ? "Admin passcode rejected. Unlock again." : "Could not remove that post.");
+    }
+  }
+
+  async function clearEverything() {
+    try {
+      await api.clearAll();
+      setPlan(null); setImages({}); setFeedback({}); setSelected(null); setDraft(null);
+      setTab("upload");
+      flash("Everything cleared.");
+    } catch (e) {
+      flash(/passcode|401/i.test(e.message) ? "Admin passcode rejected. Unlock again." : "Could not clear. Try again.");
     }
   }
 
@@ -562,7 +707,7 @@ export default function Portal() {
             </div>
           </div>
           <button
-            onClick={() => (isAdmin ? (api.clearSavedPass(), setMe((m) => ({ ...m, role: "client" }))) : enterAdmin())}
+            onClick={() => (isAdmin ? (api.clearSavedPass(), setDraft(null), setMe((m) => ({ ...m, role: "client" }))) : enterAdmin())}
             className="px-3 py-1.5 rounded-full flex items-center gap-1.5"
             style={{ border: `1px solid ${T.goldSoft}`, color: T.goldSoft, fontFamily: MONO, fontSize: 10, letterSpacing: "0.12em" }}
           >
@@ -577,7 +722,7 @@ export default function Portal() {
           <div className="w-full max-w-sm p-5 rounded-2xl" style={{ background: T.ivory }}>
             <div style={{ fontFamily: DISPLAY, fontSize: 20 }}>Enter admin passcode</div>
             <p className="mt-2" style={{ fontSize: 12, color: T.muted, lineHeight: 1.5 }}>
-              Set as ADMIN_PASSCODE in your Netlify site settings. Uploads are checked on the server.
+              Set as ADMIN_PASSCODE in your Netlify site settings. Every upload and edit is checked on the server.
             </p>
             <input
               value={pinInput} onChange={(e) => setPinInput(e.target.value)} type="password"
@@ -675,7 +820,7 @@ export default function Portal() {
                 {/* the mirror */}
                 <div className="mx-auto w-full" style={{ maxWidth: 420 }}>
                   <div className="overflow-hidden" style={{ borderRadius: 22, border: `1px solid ${T.line}`, boxShadow: "0 18px 40px -28px rgba(27,23,20,0.5)" }}>
-                    <Preview post={post} brand={brand} img={images[post.id]} expanded={expanded} onExpand={() => setExpanded(true)} />
+                    <Preview post={shown} brand={brand} img={images[post.id]} expanded={expanded} onExpand={() => setExpanded(true)} />
                   </div>
 
                   {isAdmin && (
@@ -690,15 +835,43 @@ export default function Portal() {
                       {images[post.id] && (
                         <button onClick={() => removeImage(post.id)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
                           style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 12, color: T.maroon }}>
-                          <Trash2 size={13} />Remove
+                          <Trash2 size={13} />Remove image
                         </button>
                       )}
+                      {draft ? (
+                        <button onClick={() => setDraft(null)} className="px-3 py-1.5 rounded-full"
+                          style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 12 }}>
+                          Stop editing
+                        </button>
+                      ) : (
+                        <button onClick={() => setDraft(fieldsToDraft(post))}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+                          style={{ border: `1px solid ${T.line}`, background: "#fff", fontSize: 12 }}>
+                          <Pencil size={13} />Edit post
+                        </button>
+                      )}
+                      <button
+                        onClick={() => (confirmDel ? removePost(post.id) : setConfirmDel(true))}
+                        onBlur={() => setConfirmDel(false)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+                        style={{
+                          border: `1px solid ${confirmDel ? T.maroon : T.line}`,
+                          background: confirmDel ? T.maroon : "#fff",
+                          color: confirmDel ? "#fff" : T.maroon, fontSize: 12,
+                        }}>
+                        <Trash2 size={13} />{confirmDel ? "Tap again to delete" : "Delete post"}
+                      </button>
                     </div>
                   )}
                 </div>
 
                 {/* details + notes */}
                 <div>
+                  {draft ? (
+                    <PostEditor draft={draft} setDraft={setDraft} onSave={saveEdit}
+                      onCancel={() => setDraft(null)} saving={saving} />
+                  ) : (
+                  <>
                   <div className="flex items-center gap-2 flex-wrap">
                     <Chip tone="gold">Post {post.number}</Chip>
                     {post.slot && <Chip>{post.slot}</Chip>}
@@ -763,6 +936,9 @@ export default function Portal() {
                     </Section>
                   )}
 
+                  </>
+                  )}
+
                   <NotesPanel
                     post={post} entry={fbFor(post.id)} me={me} setName={setName} isAdmin={isAdmin}
                     onStatus={(status) => saveFeedback(post.id, (e) => ({ ...e, status }))}
@@ -799,7 +975,7 @@ export default function Portal() {
       )}
 
       {/* --------------------------------------------------------- upload */}
-      {isAdmin && tab === "upload" && <UploadPanel onPublish={publish} fileRef={fileRef} plan={plan} images={images} onBulk={attachImage} />}
+      {isAdmin && tab === "upload" && <UploadPanel onPublish={publish} fileRef={fileRef} plan={plan} images={images} onBulk={attachImage} onClear={clearEverything} onOpenPost={(id) => { setSelected(id); setTab("posts"); }} onDeletePost={removePost} />}
 
       {/* --------------------------------------------------------- digest */}
       {isAdmin && tab === "digest" && plan && (
@@ -909,8 +1085,10 @@ function NotesPanel({ post, entry, me, setName, isAdmin, onStatus, onAdd, onTogg
 }
 
 /* ----------------------------------------------------------- upload panel */
-function UploadPanel({ onPublish, fileRef, plan, images, onBulk }) {
+function UploadPanel({ onPublish, fileRef, plan, images, onBulk, onClear, onOpenPost, onDeletePost }) {
   const [text, setText] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [pendingId, setPendingId] = useState(null);
   const bulkRef = useRef(null);
 
   const readFile = (file) => {
@@ -970,6 +1148,59 @@ function UploadPanel({ onPublish, fileRef, plan, images, onBulk }) {
                   : <div className="w-full h-full flex items-center justify-center" style={{ fontFamily: MONO, fontSize: 10, color: T.gold }}>{p.number}</div>}
               </div>
             ))}
+          </div>
+
+          <div className="mt-8">
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>POSTS</div>
+            <p className="mt-2" style={{ fontSize: 13, color: T.muted }}>
+              Open a post to edit its caption, or remove it from the plan. Removing a post also drops its image and its notes.
+            </p>
+            {plan.posts.map((p) => (
+              <div key={p.id} className="flex items-center gap-2 mt-2 p-3 rounded-xl" style={{ background: "#fff", border: `1px solid ${T.line}` }}>
+                <div className="min-w-0 flex-1">
+                  <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.12em", color: T.gold }}>
+                    POST {p.number} · {dayShort(p.dayLabel).toUpperCase()}
+                  </div>
+                  <div className="truncate" style={{ fontFamily: DISPLAY, fontSize: 15 }}>{p.fields.hook || p.theme}</div>
+                </div>
+                <button onClick={() => onOpenPost(p.id)} className="px-3 py-1.5 rounded-full shrink-0"
+                  style={{ border: `1px solid ${T.line}`, fontSize: 12 }}>
+                  Open
+                </button>
+                <button
+                  onClick={() => (pendingId === p.id ? (onDeletePost(p.id), setPendingId(null)) : setPendingId(p.id))}
+                  onBlur={() => setPendingId(null)}
+                  className="px-3 py-1.5 rounded-full shrink-0"
+                  style={{
+                    border: `1px solid ${pendingId === p.id ? T.maroon : T.line}`,
+                    background: pendingId === p.id ? T.maroon : "#fff",
+                    color: pendingId === p.id ? "#fff" : T.maroon, fontSize: 12,
+                  }}>
+                  {pendingId === p.id ? "Confirm" : "Remove"}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-8 p-4 rounded-2xl" style={{ background: "#fff", border: `1px solid ${T.maroon}` }}>
+            <div style={{ fontFamily: DISPLAY, fontSize: 18, color: T.maroon }}>Clear everything</div>
+            <p className="mt-1" style={{ fontSize: 13, color: T.muted, lineHeight: 1.55 }}>
+              Deletes the plan, every image and every client note. This cannot be undone. Type CLEAR to enable the button.
+            </p>
+            <div className="flex items-center gap-2 mt-3">
+              <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="CLEAR"
+                className="px-3 py-2 rounded-lg flex-1 min-w-0" style={{ border: `1px solid ${T.line}`, fontSize: 13 }} />
+              <button
+                onClick={() => { onClear(); setConfirmText(""); }}
+                disabled={confirmText.trim().toUpperCase() !== "CLEAR"}
+                className="px-4 py-2 rounded-lg shrink-0"
+                style={{
+                  background: confirmText.trim().toUpperCase() === "CLEAR" ? T.maroon : "#EFEAE2",
+                  color: confirmText.trim().toUpperCase() === "CLEAR" ? "#fff" : T.muted, fontSize: 13,
+                }}>
+                Clear everything
+              </button>
+            </div>
           </div>
         </div>
       )}
