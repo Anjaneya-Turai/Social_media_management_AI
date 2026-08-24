@@ -36,6 +36,7 @@ export default async (request) => {
   const secret = process.env.ADMIN_PASSCODE;
   const isAdmin = Boolean(secret) && body.passcode === secret;
 
+  // Open to anyone with the link: clients leaving notes and approvals.
   if (action === "feedback") {
     const { postId, entry } = body;
     if (!postId || !entry) return json({ error: "postId and entry are required" }, 400);
@@ -45,6 +46,7 @@ export default async (request) => {
     return json({ feedback });
   }
 
+  // Everything below requires the admin passcode.
   if (!isAdmin) return json({ error: "Admin passcode does not match" }, 401);
 
   if (action === "plan") {
@@ -61,6 +63,54 @@ export default async (request) => {
     else delete images[postId];
     await store().setJSON("images", images);
     return json({ images });
+  }
+
+  if (action === "post-update") {
+    const { postId, fields, theme } = body;
+    if (!postId || !fields) return json({ error: "postId and fields are required" }, 400);
+    const plan = await read("plan", null);
+    if (!plan) return json({ error: "No plan published" }, 404);
+    const idx = plan.posts.findIndex((p) => p.id === postId);
+    if (idx === -1) return json({ error: "Post not found" }, 404);
+    plan.posts[idx] = {
+      ...plan.posts[idx],
+      fields,
+      theme: theme == null ? plan.posts[idx].theme : theme,
+    };
+    await store().setJSON("plan", plan);
+    return json({ plan });
+  }
+
+  if (action === "post-delete") {
+    const { postId } = body;
+    if (!postId) return json({ error: "postId is required" }, 400);
+    const [plan, images, feedback] = await Promise.all([
+      read("plan", null),
+      read("images", {}),
+      read("feedback", {}),
+    ]);
+    if (!plan) return json({ error: "No plan published" }, 404);
+    plan.posts = plan.posts.filter((p) => p.id !== postId);
+    plan.days = plan.days
+      .map((d) => ({ ...d, postIds: d.postIds.filter((id) => id !== postId) }))
+      .filter((d) => d.postIds.length);
+    delete images[postId];
+    delete feedback[postId];
+    await Promise.all([
+      store().setJSON("plan", plan),
+      store().setJSON("images", images),
+      store().setJSON("feedback", feedback),
+    ]);
+    return json({ plan, images, feedback });
+  }
+
+  if (action === "clear") {
+    await Promise.all([
+      store().delete("plan"),
+      store().delete("images"),
+      store().delete("feedback"),
+    ]);
+    return json({ ok: true });
   }
 
   return json({ error: "Unknown action" }, 400);
