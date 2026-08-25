@@ -15,12 +15,13 @@ async function read(key, fallback) {
 
 export default async (request) => {
   if (request.method === "GET") {
-    const [plan, images, feedback] = await Promise.all([
+    const [plan, images, feedback, brand] = await Promise.all([
       read("plan", null),
       read("images", {}),
       read("feedback", {}),
+      read("brand", {}),
     ]);
-    return json({ plan, images, feedback });
+    return json({ plan, images, feedback, brand });
   }
 
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -63,6 +64,13 @@ export default async (request) => {
     else delete images[postId];
     await store().setJSON("images", images);
     return json({ images });
+  }
+
+  if (action === "brand") {
+    if (!body.brand || typeof body.brand !== "object")
+      return json({ error: "brand object is required" }, 400);
+    await store().setJSON("brand", body.brand);
+    return json({ brand: body.brand });
   }
 
   if (action === "post-update") {
