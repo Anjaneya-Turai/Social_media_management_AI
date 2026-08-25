@@ -7,10 +7,6 @@ import {
 import * as api from "./api";
 
 /* ------------------------------------------------------------------ tokens */
-const AC = "var(--brand-accent)";
-const DEEP = "var(--brand-deep)";
-const SOFT = "var(--brand-soft)";
-
 const T = {
   ink: "#1B1714",
   charcoal: "#231E1A",
@@ -26,6 +22,25 @@ const T = {
 const DISPLAY = '"Didot","Bodoni MT","Playfair Display",Georgia,"Times New Roman",serif';
 const BODY = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
 const MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+
+/* mix a hex colour toward white, e.g. tint("#B0842A", 0.15) */
+function tint(hex, amount) {
+  const h = String(hex).replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n)) return "#F4EEE4";
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const mix = (v) => Math.round(v * amount + 255 * (1 - amount));
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
+
+/* stable per-post sample engagement, so numbers never jump between renders */
+const hashInt = (str, min, max) => {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 100000;
+  return min + (h % (max - min));
+};
+const groupCount = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString());
 
 /* ----------------------------------------------------------------- parsing */
 const WEEKDAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
@@ -199,19 +214,62 @@ function RichText({ text, tags = [], clamp = 0, expanded, onExpand, tagColor = "
   );
 }
 
+function Verified({ size = 12, color = "#0095F6" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color} aria-hidden="true">
+      <path d="M12 1.5l2.3 2.1 3.1-.3.9 3 2.8 1.4-1 3 1 3-2.8 1.4-.9 3-3.1-.3L12 22.5l-2.3-2.1-3.1.3-.9-3-2.8-1.4 1-3-1-3L5.7 6.3l.9-3 3.1.3L12 1.5z" />
+      <path d="M10.6 15.6l-3-3 1.2-1.2 1.8 1.8 4.2-4.2 1.2 1.2-5.4 5.4z" fill="#fff" />
+    </svg>
+  );
+}
+
+function Avatar({ brand, size = 38, ring, square }) {
+  const radius = square ? 8 : 999;
+  const inner = brand.logo ? (
+    <img src={brand.logo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: radius }} />
+  ) : (
+    <div className="flex items-center justify-center w-full h-full"
+      style={{
+        borderRadius: radius,
+        background: `linear-gradient(135deg, ${brand.deep}, ${brand.accent})`,
+        color: "#fff", fontFamily: DISPLAY, fontSize: Math.round(size * 0.4), letterSpacing: "0.04em",
+      }}>
+      {initials(brand.name)}
+    </div>
+  );
+
+  if (!ring) {
+    return <div className="shrink-0 overflow-hidden" style={{ width: size, height: size, borderRadius: radius }}>{inner}</div>;
+  }
+  return (
+    <div className="shrink-0 flex items-center justify-center"
+      style={{
+        width: size + 6, height: size + 6, borderRadius: 999, padding: 2,
+        background: brand.brandRing
+          ? `linear-gradient(45deg, ${brand.deep}, ${brand.accent})`
+          : "linear-gradient(45deg,#F9CE34,#EE2A7B,#6228D7)",
+      }}>
+      <div className="flex items-center justify-center" style={{ width: size + 2, height: size + 2, borderRadius: 999, background: "#fff" }}>
+        <div className="overflow-hidden" style={{ width: size - 2, height: size - 2, borderRadius: 999 }}>{inner}</div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------ media canvas */
-function Media({ post, img, ratio, adminSlot }) {
+function Media({ post, img, ratio, adminSlot, brand }) {
   const slides = post.fields.slides || [];
   const [i, setI] = useState(0);
   const has = slides.length > 1;
   useEffect(() => setI(0), [post.id]);
   return (
-    <div className="relative w-full overflow-hidden" style={{ aspectRatio: ratio, background: T.champagne }}>
+    <div className="relative w-full overflow-hidden" style={{ aspectRatio: ratio, background: tint(brand.accent, 0.16) }}>
       {img
         ? <img src={img} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: "cover" }} />
         : (
-          <div className="absolute inset-0 flex flex-col justify-center p-6" style={{ background: `linear-gradient(160deg, color-mix(in srgb, var(--brand-accent) 18%, #FFFFFF), color-mix(in srgb, var(--brand-accent) 6%, #FFFFFF))` }}>
-            <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.18em", color: AC }}>IMAGE PENDING</div>
+          <div className="absolute inset-0 flex flex-col justify-center p-6"
+            style={{ background: `linear-gradient(160deg, ${tint(brand.accent, 0.20)}, ${tint(brand.accent, 0.06)})` }}>
+            <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.18em", color: brand.accent }}>IMAGE PENDING</div>
             <div className="mt-3" style={{ fontFamily: DISPLAY, fontSize: 17, lineHeight: 1.3, color: T.ink }}>
               {post.fields.hook || post.theme || "Visual to come"}
             </div>
@@ -247,57 +305,12 @@ function Media({ post, img, ratio, adminSlot }) {
 }
 
 /* -------------------------------------------------------------- previews */
-// Chrome colours are the platforms' own. Brand colour shows in the avatar,
-// the story ring and the placeholder art, which is where it shows in real life.
-
-const hashInt = (str, min, max) => {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 100000;
-  return min + (h % (max - min));
-};
-const groupCount = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-
-function Verified({ size = 12, color = "#0095F6" }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill={color} aria-hidden="true">
-      <path d="M12 1.5l2.3 2.1 3.1-.3.9 3 2.8 1.4-1 3 1 3-2.8 1.4-.9 3-3.1-.3L12 22.5l-2.3-2.1-3.1.3-.9-3-2.8-1.4 1-3-1-3L5.7 6.3l.9-3 3.1.3L12 1.5z" />
-      <path d="M10.6 15.6l-3-3 1.2-1.2 1.8 1.8 4.2-4.2 1.2 1.2-5.4 5.4z" fill="#fff" />
-    </svg>
-  );
-}
-
-function Avatar({ brand, size = 38, ring, square }) {
-  const inner = brand.logo ? (
-    <img src={brand.logo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: square ? 8 : 999 }} />
-  ) : (
-    <div className="flex items-center justify-center w-full h-full"
-      style={{
-        borderRadius: square ? 8 : 999,
-        background: `linear-gradient(135deg, var(--brand-deep), var(--brand-accent))`,
-        color: "#fff", fontFamily: DISPLAY, fontSize: size * 0.4, letterSpacing: "0.04em",
-      }}>
-      {initials(brand.name)}
-    </div>
-  );
-  if (!ring) return <div className="shrink-0 overflow-hidden" style={{ width: size, height: size, borderRadius: square ? 8 : 999 }}>{inner}</div>;
-  return (
-    <div className="shrink-0 flex items-center justify-center"
-      style={{
-        width: size + 6, height: size + 6, borderRadius: 999, padding: 2,
-        background: brand.brandRing
-          ? `linear-gradient(45deg, var(--brand-deep), var(--brand-accent))`
-          : "linear-gradient(45deg,#F9CE34,#EE2A7B,#6228D7)",
-      }}>
-      <div className="flex items-center justify-center" style={{ width: size + 2, height: size + 2, borderRadius: 999, background: "#fff" }}>
-        <div className="overflow-hidden" style={{ width: size - 2, height: size - 2, borderRadius: 999 }}>{inner}</div>
-      </div>
-    </div>
-  );
-}
+/* Chrome colours below are each platform's own, deliberately. The brand shows
+   where it shows in real life: the profile picture, the story ring, the art. */
 
 /* Instagram */
-function IgPreview({ post, brand, img, expanded, onExpand }) {
-  const likes = hashInt(post.id, 120, 940);
+function IgPreview({ post, brand, img, expanded, onExpand, metrics }) {
+  const likes = hashInt(post.id, 140, 1900);
   const comments = hashInt(post.id + "c", 4, 48);
   return (
     <div style={{ background: "#fff", fontFamily: BODY, color: "#262626" }}>
@@ -308,12 +321,12 @@ function IgPreview({ post, brand, img, expanded, onExpand }) {
             <span style={{ fontSize: 13, fontWeight: 600 }}>{brand.handle}</span>
             {brand.verified && <Verified />}
           </div>
-          {brand.city && <div style={{ fontSize: 11, color: "#262626" }}>{brand.city}</div>}
+          {brand.city && <div style={{ fontSize: 11 }}>{brand.city}</div>}
         </div>
         <MoreHorizontal size={18} color="#262626" />
       </div>
 
-      <Media post={post} img={img} ratio="4 / 5" />
+      <Media post={post} img={img} ratio="4 / 5" brand={brand} />
 
       <div className="flex items-center px-3 pt-2.5" style={{ gap: 14 }}>
         <Heart size={24} strokeWidth={1.6} />
@@ -323,14 +336,15 @@ function IgPreview({ post, brand, img, expanded, onExpand }) {
         <Bookmark size={23} strokeWidth={1.6} />
       </div>
 
-      <div className="px-3 pt-2" style={{ fontSize: 13, lineHeight: 1.45 }}>
-        <div style={{ fontWeight: 600 }}>{groupCount(likes)} likes</div>
+      <div className="px-3 pt-2 pb-3" style={{ fontSize: 13, lineHeight: 1.45 }}>
+        {metrics && <div style={{ fontWeight: 600 }}>{groupCount(likes)} likes</div>}
         <div className="mt-1">
           <span style={{ fontWeight: 600 }}>{brand.handle} </span>
-          <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 125} expanded={expanded} onExpand={onExpand} tagColor="#00376B" />
+          <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 125}
+            expanded={expanded} onExpand={onExpand} tagColor="#00376B" />
         </div>
-        <div className="mt-1" style={{ color: "#8E8E8E" }}>View all {comments} comments</div>
-        <div className="mt-1.5 pb-3" style={{ fontSize: 10, color: "#8E8E8E", letterSpacing: "0.02em" }}>
+        {metrics && <div className="mt-1" style={{ color: "#8E8E8E" }}>View all {comments} comments</div>}
+        <div className="mt-1.5" style={{ fontSize: 10, color: "#8E8E8E", letterSpacing: "0.02em" }}>
           {dayShort(post.dayLabel).toUpperCase()} · {slotTime(post.slot)}
         </div>
       </div>
@@ -339,8 +353,8 @@ function IgPreview({ post, brand, img, expanded, onExpand }) {
 }
 
 /* Facebook */
-function FbPreview({ post, brand, img, expanded, onExpand }) {
-  const reactions = hashInt(post.id + "f", 40, 320);
+function FbPreview({ post, brand, img, expanded, onExpand, metrics }) {
+  const reactions = hashInt(post.id + "f", 40, 480);
   const comments = hashInt(post.id + "fc", 3, 29);
   const shares = hashInt(post.id + "fs", 1, 14);
   return (
@@ -348,7 +362,10 @@ function FbPreview({ post, brand, img, expanded, onExpand }) {
       <div className="flex items-center gap-2.5 px-3 pt-3 pb-2">
         <Avatar brand={brand} size={40} />
         <div className="min-w-0 flex-1 leading-tight">
-          <div style={{ fontSize: 15, fontWeight: 600 }}>{brand.name}</div>
+          <div className="flex items-center gap-1">
+            <span style={{ fontSize: 15, fontWeight: 600 }}>{brand.name}</span>
+            {brand.verified && <Verified color="#1877F2" />}
+          </div>
           <div className="flex items-center gap-1 mt-0.5" style={{ fontSize: 12, color: "#65676B" }}>
             {dayShort(post.dayLabel)} at {slotTime(post.slot)} · <Globe size={12} />
           </div>
@@ -357,23 +374,26 @@ function FbPreview({ post, brand, img, expanded, onExpand }) {
       </div>
 
       <div className="px-3 pb-2.5" style={{ fontSize: 15, lineHeight: 1.45 }}>
-        <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 200} expanded={expanded} onExpand={onExpand} tagColor="#1877F2" />
+        <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 200}
+          expanded={expanded} onExpand={onExpand} tagColor="#1877F2" />
       </div>
 
-      <Media post={post} img={img} ratio="4 / 5" />
+      <Media post={post} img={img} ratio="4 / 5" brand={brand} />
 
-      <div className="flex items-center gap-1.5 px-3 py-2" style={{ fontSize: 13, color: "#65676B" }}>
-        <span className="flex items-center justify-center" style={{ width: 18, height: 18, borderRadius: 999, background: "#1877F2" }}>
-          <ThumbsUp size={10} color="#fff" fill="#fff" />
-        </span>
-        <span className="flex items-center justify-center" style={{ width: 18, height: 18, borderRadius: 999, background: "#F3425F", marginLeft: -8 }}>
-          <Heart size={10} color="#fff" fill="#fff" />
-        </span>
-        <span className="ml-1">{reactions}</span>
-        <div className="flex-1" />
-        <span>{comments} comments</span>
-        <span>· {shares} shares</span>
-      </div>
+      {metrics && (
+        <div className="flex items-center px-3 py-2" style={{ fontSize: 13, color: "#65676B" }}>
+          <span className="flex items-center justify-center" style={{ width: 18, height: 18, borderRadius: 999, background: "#1877F2" }}>
+            <ThumbsUp size={10} color="#fff" fill="#fff" />
+          </span>
+          <span className="flex items-center justify-center" style={{ width: 18, height: 18, borderRadius: 999, background: "#F3425F", marginLeft: -5, border: "1.5px solid #fff" }}>
+            <Heart size={9} color="#fff" fill="#fff" />
+          </span>
+          <span className="ml-1.5">{reactions}</span>
+          <div className="flex-1" />
+          <span>{comments} comments</span>
+          <span className="ml-2">{shares} shares</span>
+        </div>
+      )}
 
       <div className="mx-3" style={{ borderTop: "1px solid #CED0D4" }} />
       <div className="flex items-center justify-around py-1.5" style={{ color: "#65676B", fontSize: 15, fontWeight: 600 }}>
@@ -386,8 +406,8 @@ function FbPreview({ post, brand, img, expanded, onExpand }) {
 }
 
 /* LinkedIn */
-function LiPreview({ post, brand, img, expanded, onExpand }) {
-  const reactions = hashInt(post.id + "l", 18, 210);
+function LiPreview({ post, brand, img, expanded, onExpand, metrics }) {
+  const reactions = hashInt(post.id + "l", 18, 240);
   const comments = hashInt(post.id + "lc", 2, 22);
   return (
     <div style={{ background: "#fff", fontFamily: BODY, color: "rgba(0,0,0,0.9)" }}>
@@ -398,33 +418,31 @@ function LiPreview({ post, brand, img, expanded, onExpand }) {
             <span style={{ fontSize: 14, fontWeight: 600 }}>{brand.name}</span>
             {brand.verified && <Verified color="#0A66C2" />}
           </div>
-          <div className="truncate" style={{ fontSize: 12, color: "rgba(0,0,0,0.6)" }}>{brand.tagline || "Jewellery store"}</div>
+          <div className="truncate" style={{ fontSize: 12, color: "rgba(0,0,0,0.6)" }}>{brand.tagline || brand.city}</div>
           <div className="flex items-center gap-1" style={{ fontSize: 12, color: "rgba(0,0,0,0.6)" }}>1d · <Globe size={12} /></div>
         </div>
-        <span className="flex items-center gap-1 shrink-0" style={{ color: "#0A66C2", fontSize: 14, fontWeight: 600 }}>
-          <Plus size={15} strokeWidth={3} />Follow
-        </span>
+        <MoreHorizontal size={20} color="rgba(0,0,0,0.6)" />
       </div>
 
       <div className="px-3 pb-3" style={{ fontSize: 14, lineHeight: 1.45 }}>
-        <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 180} expanded={expanded} onExpand={onExpand} tagColor="#0A66C2" />
+        <RichText text={post.fields.caption} tags={post.fields.tags} clamp={expanded ? 0 : 180}
+          expanded={expanded} onExpand={onExpand} tagColor="#0A66C2" />
       </div>
 
-      <Media post={post} img={img} ratio="1 / 1" />
+      <Media post={post} img={img} ratio="1 / 1" brand={brand} />
 
-      <div className="flex items-center gap-1 px-3 py-2" style={{ fontSize: 12, color: "rgba(0,0,0,0.6)" }}>
-        <span className="flex items-center justify-center" style={{ width: 16, height: 16, borderRadius: 999, background: "#378FE9" }}>
-          <ThumbsUp size={9} color="#fff" fill="#fff" />
-        </span>
-        <span className="flex items-center justify-center" style={{ width: 16, height: 16, borderRadius: 999, background: "#DF704D", marginLeft: -6 }}>
-          <Heart size={9} color="#fff" fill="#fff" />
-        </span>
-        <span className="ml-1">{reactions}</span>
-        <div className="flex-1" />
-        <span>{comments} comments</span>
-      </div>
+      {metrics && (
+        <div className="flex items-center px-3 py-2" style={{ fontSize: 12, color: "rgba(0,0,0,0.6)" }}>
+          <span className="flex items-center justify-center" style={{ width: 16, height: 16, borderRadius: 999, background: "#378FE9" }}>
+            <ThumbsUp size={9} color="#fff" fill="#fff" />
+          </span>
+          <span className="ml-1.5">{reactions}</span>
+          <div className="flex-1" />
+          <span>{comments} comments</span>
+        </div>
+      )}
 
-      <div className="mx-3" style={{ borderTop: "1px solid rgba(0,0,0,0.08)" }} />
+      <div className="mx-3" style={{ borderTop: "1px solid #E9E5DF" }} />
       <div className="flex items-center justify-around py-1.5" style={{ color: "rgba(0,0,0,0.6)", fontSize: 14, fontWeight: 600 }}>
         <span className="flex items-center gap-1.5 px-2 py-1.5"><ThumbsUp size={18} /> Like</span>
         <span className="flex items-center gap-1.5 px-2 py-1.5"><MessageCircle size={18} /> Comment</span>
@@ -436,52 +454,46 @@ function LiPreview({ post, brand, img, expanded, onExpand }) {
 }
 
 /* Pinterest */
-function PinPreview({ post, brand, img }) {
+function PinPreview({ post, brand, img, metrics }) {
   const desc = (post.fields.caption || "").split("\n").filter(Boolean).slice(0, 2).join(" ");
-  const site = (brand.site || "").replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  const saves = hashInt(post.id + "p", 12, 340);
+  const source = (brand.site || "").replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
   return (
-    <div style={{ background: "#fff", fontFamily: BODY, color: "#111" }} className="p-2.5">
-      <div className="flex items-center gap-2 pb-2.5">
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full" style={{ background: "#E9E9E9", fontSize: 13, fontWeight: 600 }}>
-          <Avatar brand={brand} size={18} />
-          <span className="truncate" style={{ maxWidth: 120 }}>{brand.name}</span>
-          <ChevronRight size={13} style={{ transform: "rotate(90deg)" }} />
+    <div style={{ background: "#fff", fontFamily: BODY, color: "#111" }} className="p-3">
+      <div className="relative overflow-hidden" style={{ borderRadius: 16 }}>
+        <Media post={post} img={img} ratio="2 / 3" brand={brand} />
+        <div className="absolute top-2 right-2 px-3.5 py-2 rounded-full"
+          style={{ background: "#E60023", color: "#fff", fontSize: 13, fontWeight: 700 }}>
+          Save
         </div>
-        <div className="flex-1" />
-        <div className="px-4 py-1.5 rounded-full" style={{ background: "#E60023", color: "#fff", fontSize: 14, fontWeight: 700 }}>Save</div>
       </div>
-
-      <div className="overflow-hidden" style={{ borderRadius: 16 }}>
-        <Media post={post} img={img} ratio="2 / 3" />
+      {source && <div className="pt-2" style={{ fontSize: 11, color: "#767676" }}>{source}</div>}
+      <div className="pt-1" style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.3 }}>
+        {post.fields.hook || post.theme}
       </div>
-
-      <div className="flex items-center gap-3 pt-2.5" style={{ color: "#111" }}>
-        <Share2 size={17} /><MoreHorizontal size={17} />
-      </div>
-
-      <div className="pt-2" style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.3 }}>{post.fields.hook || post.theme}</div>
-      <div className="pt-1" style={{ fontSize: 13, color: "#333", lineHeight: 1.45 }}>{desc}</div>
-      {site && <div className="pt-1.5" style={{ fontSize: 12, color: "#767676" }}>Saved from {site}</div>}
-      <div className="flex items-center gap-2 pt-2.5">
+      <div className="pt-1" style={{ fontSize: 13, color: "#5F5F5F", lineHeight: 1.45 }}>{desc}</div>
+      <div className="flex items-center gap-2 pt-3">
         <Avatar brand={brand} size={28} />
         <div style={{ fontSize: 13, fontWeight: 600 }}>{brand.name}</div>
+        {metrics && <div style={{ fontSize: 12, color: "#767676" }}>· {saves} saves</div>}
       </div>
+      <div className="pt-2" style={{ fontSize: 11, color: "#767676" }}>{post.fields.tags.slice(0, 6).join(" ")}</div>
     </div>
   );
 }
 
 const PLATFORMS = [
-  { id: "instagram", label: "Instagram", Icon: Instagram, C: IgPreview },
-  { id: "facebook", label: "Facebook", Icon: Facebook, C: FbPreview },
-  { id: "linkedin", label: "LinkedIn", Icon: Linkedin, C: LiPreview },
-  { id: "pinterest", label: "Pinterest", Icon: CircleDot, C: PinPreview },
+  { id: "instagram", label: "Instagram", Icon: Instagram, C: IgPreview, page: "#FAFAFA", frame: "#111" },
+  { id: "facebook", label: "Facebook", Icon: Facebook, C: FbPreview, page: "#F0F2F5", frame: "#111" },
+  { id: "linkedin", label: "LinkedIn", Icon: Linkedin, C: LiPreview, page: "#F4F2EE", frame: "#111" },
+  { id: "pinterest", label: "Pinterest", Icon: CircleDot, C: PinPreview, page: "#FFFFFF", frame: "#111" },
 ];
 
 /* ------------------------------------------------------------------ pieces */
 function Chip({ children, tone = "neutral", onClick, active }) {
   const tones = {
     neutral: { bg: "transparent", fg: T.muted, bd: T.line },
-    gold: { bg: "#FBF3E2", fg: AC, bd: "#EBD9B4" },
+    gold: { bg: "#FBF3E2", fg: T.gold, bd: "#EBD9B4" },
     green: { bg: "#E9F2EE", fg: T.emerald, bd: "#C9E0D7" },
     maroon: { bg: "#F7E9EC", fg: T.maroon, bd: "#EBCFD5" },
   };
@@ -506,7 +518,7 @@ function Section({ label, children, right }) {
   return (
     <div className="mt-5">
       <div className="flex items-center justify-between mb-2">
-        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: AC }}>{label}</div>
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>{label}</div>
         {right}
       </div>
       {children}
@@ -545,7 +557,7 @@ const draftToFields = (d) => ({
 function Field({ label, value, onChange, rows = 3, mono }) {
   return (
     <label className="block mt-3">
-      <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.14em", color: AC }}>{label}</span>
+      <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.14em", color: T.gold }}>{label}</span>
       {rows === 1 ? (
         <input value={value} onChange={(e) => onChange(e.target.value)}
           className="w-full mt-1 px-3 py-2 rounded-lg"
@@ -578,7 +590,7 @@ function PostEditor({ draft, setDraft, onSave, onCancel, saving }) {
       <Field label="IMAGE BRIEF" value={draft.visual} onChange={set("visual")} rows={4} />
 
       <div className="mt-4">
-        <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.14em", color: AC }}>SLIDES</span>
+        <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.14em", color: T.gold }}>SLIDES</span>
         {draft.slides.map((sl, i) => (
           <div key={i} className="flex gap-2 mt-2">
             <textarea value={sl} rows={2}
@@ -617,11 +629,11 @@ export default function Portal() {
   const [plan, setPlan] = useState(null);
   const [images, setImages] = useState({});
   const [feedback, setFeedback] = useState({});
+  const [brandCfg, setBrandCfg] = useState({});
   const [loadError, setLoadError] = useState("");
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
-  const [brandCfg, setBrandCfg] = useState({});
   const [me, setMe] = useState({ name: "", role: "client" });
   const [platform, setPlatform] = useState("instagram");
   const [selected, setSelected] = useState(null);
@@ -665,9 +677,9 @@ export default function Portal() {
       logo: brandCfg.logo || "",
       verified: Boolean(brandCfg.verified),
       brandRing: Boolean(brandCfg.brandRing),
+      metrics: brandCfg.metrics !== false,
       accent: brandCfg.accent || T.gold,
-      deep: brandCfg.deep || T.charcoal,
-      soft: brandCfg.soft || T.goldSoft,
+      deep: brandCfg.deep || T.maroon,
     };
   }, [plan, brandCfg]);
 
@@ -819,25 +831,22 @@ export default function Portal() {
 
   if (!ready) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: T.ivory, "--brand-accent": T.gold, "--brand-deep": T.charcoal, "--brand-soft": T.goldSoft }}>
-        <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.2em", color: AC }}>LOADING</div>
+      <div className="min-h-screen flex items-center justify-center" style={{ background: T.ivory }}>
+        <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.2em", color: T.gold }}>LOADING</div>
       </div>
     );
   }
 
-  const Preview = PLATFORMS.find((p) => p.id === platform).C;
+  const pf = PLATFORMS.find((p) => p.id === platform);
+  const Preview = pf.C;
 
   return (
-    <div className="min-h-screen"
-      style={{
-        background: T.ivory, fontFamily: BODY, color: T.ink,
-        "--brand-accent": brand.accent, "--brand-deep": brand.deep, "--brand-soft": brand.soft,
-      }}>
+    <div className="min-h-screen" style={{ background: T.ivory, fontFamily: BODY, color: T.ink }}>
       {/* header */}
-      <div style={{ background: DEEP, color: T.ivory }}>
+      <div style={{ background: T.charcoal, color: T.ivory }}>
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.22em", color: ACSoft }}>CONTENT REVIEW</div>
+            <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.22em", color: T.goldSoft }}>CONTENT REVIEW</div>
             <div className="truncate" style={{ fontFamily: DISPLAY, fontSize: 19, letterSpacing: "0.01em" }}>
               {plan ? plan.brand.name : "Client portal"}
             </div>
@@ -845,7 +854,7 @@ export default function Portal() {
           <button
             onClick={() => (isAdmin ? (api.clearSavedPass(), setDraft(null), setMe((m) => ({ ...m, role: "client" }))) : enterAdmin())}
             className="px-3 py-1.5 rounded-full flex items-center gap-1.5"
-            style={{ border: `1px solid ${ACSoft}`, color: ACSoft, fontFamily: MONO, fontSize: 10, letterSpacing: "0.12em" }}
+            style={{ border: `1px solid ${T.goldSoft}`, color: T.goldSoft, fontFamily: MONO, fontSize: 10, letterSpacing: "0.12em" }}
           >
             <Lock size={11} />{isAdmin ? "ADMIN" : "CLIENT"}
           </button>
@@ -884,7 +893,7 @@ export default function Portal() {
             <button key={id} onClick={() => setTab(id)} className="pb-1"
               style={{
                 fontFamily: MONO, fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase",
-                color: tab === id ? T.ink : T.muted, borderBottom: `2px solid ${tab === id ? AC : "transparent"}`,
+                color: tab === id ? T.ink : T.muted, borderBottom: `2px solid ${tab === id ? T.gold : "transparent"}`,
               }}>
               {label}
             </button>
@@ -922,7 +931,7 @@ export default function Portal() {
                         border: `1px solid ${on ? T.ink : T.line}`,
                       }}>
                       <div className="flex items-center justify-between">
-                        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.14em", color: on ? ACSoft : AC }}>
+                        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.14em", color: on ? T.goldSoft : T.gold }}>
                           {dayShort(p.dayLabel).toUpperCase()}
                         </span>
                         <span style={{ width: 7, height: 7, borderRadius: 999, background: f.status === "approved" ? T.emerald : f.status === "changes" ? T.maroon : (on ? "#5A5048" : T.line) }} />
@@ -955,12 +964,15 @@ export default function Portal() {
 
                 {/* the mirror */}
                 <div className="mx-auto w-full" style={{ maxWidth: 420 }}>
-                  <div className="overflow-hidden" style={{ borderRadius: 22, border: `1px solid ${T.line}`, boxShadow: "0 18px 40px -28px rgba(27,23,20,0.5)" }}>
-                    <Preview post={shown} brand={brand} img={images[post.id]} expanded={expanded} onExpand={() => setExpanded(true)} />
-                  </div>
-
-                  <div className="mt-2 text-center" style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.12em", color: T.muted }}>
-                    PREVIEW ONLY · LIKE AND COMMENT COUNTS ARE ILLUSTRATIVE
+                  <div style={{ borderRadius: 30, padding: 7, background: pf.frame, boxShadow: "0 22px 45px -26px rgba(27,23,20,0.6)" }}>
+                    <div className="overflow-hidden" style={{ borderRadius: 24, background: pf.page }}>
+                      <div style={{ padding: platform === "instagram" ? 0 : 8 }}>
+                        <div className="overflow-hidden" style={{ borderRadius: platform === "instagram" ? 0 : 10, background: "#fff" }}>
+                          <Preview post={shown} brand={brand} img={images[post.id]} metrics={brand.metrics}
+                            expanded={expanded} onExpand={() => setExpanded(true)} />
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   {isAdmin && (
@@ -1044,7 +1056,7 @@ export default function Portal() {
                       <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))" }}>
                         {post.fields.slides.map((s, i) => (
                           <div key={i} className="p-3 rounded-xl" style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
-                            <span style={{ fontFamily: MONO, fontSize: 9, color: AC }}>{String(i + 1).padStart(2, "0")}</span>
+                            <span style={{ fontFamily: MONO, fontSize: 9, color: T.gold }}>{String(i + 1).padStart(2, "0")}</span>
                             <div className="mt-1">{s}</div>
                           </div>
                         ))}
@@ -1105,7 +1117,7 @@ export default function Portal() {
           </div>
           {plan.appendix.map((a) => (
             <div key={a.heading} className="mt-4">
-              <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: AC }}>{a.heading}</div>
+              <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>{a.heading}</div>
               <div className="mt-2 p-4 rounded-2xl" style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
                 {a.body}
               </div>
@@ -1141,7 +1153,7 @@ export default function Portal() {
                 </div>
                 {open.map((c) => (
                   <div key={c.id} className="mt-2" style={{ fontSize: 13, lineHeight: 1.5 }}>
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: AC, letterSpacing: "0.1em" }}>{c.kind.toUpperCase()} </span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: T.gold, letterSpacing: "0.1em" }}>{c.kind.toUpperCase()} </span>
                     <span style={{ fontWeight: 600 }}>{c.author}: </span>{c.text}
                   </div>
                 ))}
@@ -1192,7 +1204,7 @@ function NotesPanel({ post, entry, me, setName, isAdmin, onStatus, onAdd, onTogg
       {(entry.comments || []).map((c) => (
         <div key={c.id} className="p-3 rounded-xl mb-2" style={{ background: "#fff", border: `1px solid ${T.line}`, opacity: c.resolved ? 0.55 : 1 }}>
           <div className="flex items-center gap-2">
-            <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.12em", color: c.kind === "Remove" ? T.maroon : AC }}>{c.kind.toUpperCase()}</span>
+            <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.12em", color: c.kind === "Remove" ? T.maroon : T.gold }}>{c.kind.toUpperCase()}</span>
             <span style={{ fontSize: 12, fontWeight: 600 }}>{c.author}</span>
             <span style={{ fontSize: 11, color: T.muted }}>{new Date(c.ts).toLocaleDateString()}</span>
             <div className="flex-1" />
@@ -1225,8 +1237,7 @@ function NotesPanel({ post, entry, me, setName, isAdmin, onStatus, onAdd, onTogg
 }
 
 /* ------------------------------------------------------------ brand panel */
-// Pulls candidate colours out of the uploaded logo so the palette matches
-// the real mark rather than a guess.
+/* Pull the dominant colours out of a logo so the portal can match it. */
 function sampleColours(dataUrl) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -1237,10 +1248,10 @@ function sampleColours(dataUrl) {
       const ctx = c.getContext("2d");
       ctx.drawImage(img, 0, 0, size, size);
       let data;
-      try { data = ctx.getImageData(0, 0, size, size).data; } catch { resolve([]); return; }
+      try { data = ctx.getImageData(0, 0, size, size).data; } catch (e) { resolve([]); return; }
       const buckets = new Map();
       for (let i = 0; i < data.length; i += 4) {
-        const [r, g, b, a] = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
         if (a < 200) continue;
         if (r > 244 && g > 244 && b > 244) continue;
         const key = `${Math.round(r / 24)}-${Math.round(g / 24)}-${Math.round(b / 24)}`;
@@ -1262,12 +1273,14 @@ function sampleColours(dataUrl) {
 
 function Swatch({ label, value, onChange }) {
   return (
-    <label className="flex items-center gap-2 mt-2">
+    <div className="flex items-center gap-3 mt-2">
       <input type="color" value={value} onChange={(e) => onChange(e.target.value)}
-        style={{ width: 34, height: 34, border: `1px solid ${T.line}`, borderRadius: 8, background: "none", padding: 2 }} />
-      <span style={{ fontSize: 13 }}>{label}</span>
-      <span style={{ fontFamily: MONO, fontSize: 11, color: T.muted }}>{value}</span>
-    </label>
+        style={{ width: 42, height: 34, border: `1px solid ${T.line}`, borderRadius: 8, background: "#fff", padding: 2 }} />
+      <div className="flex-1 min-w-0">
+        <div style={{ fontSize: 13 }}>{label}</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: T.muted }}>{value}</div>
+      </div>
+    </div>
   );
 }
 
@@ -1281,29 +1294,34 @@ function BrandPanel({ brand, brandCfg, onSave }) {
     logo: brandCfg.logo || "",
     verified: Boolean(brandCfg.verified),
     brandRing: Boolean(brandCfg.brandRing),
+    metrics: brandCfg.metrics !== false,
     accent: brandCfg.accent || brand.accent,
     deep: brandCfg.deep || brand.deep,
-    soft: brandCfg.soft || brand.soft,
   });
   const [picked, setPicked] = useState([]);
+  const [busy, setBusy] = useState(false);
   const logoRef = useRef(null);
   const set = (k) => (v) => setD((x) => ({ ...x, [k]: v }));
 
   const onLogo = async (file) => {
-    const dataUrl = await compress(file, 320, 0.9, "image/png");
-    setD((x) => ({ ...x, logo: dataUrl }));
-    setPicked(await sampleColours(dataUrl));
+    setBusy(true);
+    try {
+      const dataUrl = await compress(file, 320, 0.92, "image/png");
+      setD((x) => ({ ...x, logo: dataUrl }));
+      setPicked(await sampleColours(dataUrl));
+    } catch (e) { /* leave the previous logo in place */ }
+    setBusy(false);
   };
 
   return (
     <div className="mt-8">
-      <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: AC }}>BRAND</div>
+      <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>BRAND</div>
       <p className="mt-2" style={{ fontSize: 13, color: T.muted, lineHeight: 1.55 }}>
-        The logo and name appear in every preview. Colours carry through the portal, the profile picture and the placeholder art.
-        Platform chrome stays true to each platform.
+        The logo and name appear in every preview. Colours carry through the profile picture, the placeholder art and the
+        story ring. Each platform keeps its own chrome, which is what makes the preview honest.
       </p>
 
-      <div className="flex items-center gap-3 mt-3">
+      <div className="flex items-center gap-3 mt-3 flex-wrap">
         <div className="overflow-hidden shrink-0" style={{ width: 56, height: 56, borderRadius: 999, border: `1px solid ${T.line}`, background: "#fff" }}>
           {d.logo
             ? <img src={d.logo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -1316,7 +1334,7 @@ function BrandPanel({ brand, brandCfg, onSave }) {
           onChange={(e) => { const f = e.target.files[0]; if (f) onLogo(f); e.target.value = ""; }} />
         <button onClick={() => logoRef.current && logoRef.current.click()} className="flex items-center gap-1.5 px-3 py-2 rounded-lg"
           style={{ background: "#fff", border: `1px solid ${T.line}`, fontSize: 13 }}>
-          <ImageIcon size={14} />{d.logo ? "Replace logo" : "Upload logo"}
+          <ImageIcon size={14} />{busy ? "Reading" : d.logo ? "Replace logo" : "Upload logo"}
         </button>
         {d.logo && (
           <button onClick={() => { setD((x) => ({ ...x, logo: "" })); setPicked([]); }} className="px-3 py-2 rounded-lg"
@@ -1328,38 +1346,42 @@ function BrandPanel({ brand, brandCfg, onSave }) {
 
       {picked.length > 0 && (
         <div className="mt-3">
-          <div style={{ fontSize: 12, color: T.muted }}>Pulled from your logo. Tap one to set the accent, or use the pickers below.</div>
+          <div style={{ fontSize: 12, color: T.muted }}>Pulled from your logo. Tap one to use it as the accent.</div>
           <div className="flex gap-2 mt-2 flex-wrap">
             {picked.map((c) => (
-              <button key={c} onClick={() => setD((x) => ({ ...x, accent: c }))}
-                style={{ width: 34, height: 34, borderRadius: 8, background: c, border: `1px solid ${T.line}` }} title={c} />
+              <button key={c} onClick={() => setD((x) => ({ ...x, accent: c }))} title={c}
+                style={{ width: 34, height: 34, borderRadius: 8, background: c, border: `1px solid ${T.line}` }} />
             ))}
           </div>
         </div>
       )}
 
       <Field label="DISPLAY NAME" value={d.name} onChange={set("name")} rows={1} />
-      <Field label="@ HANDLE" value={d.handle} onChange={set("handle")} rows={1} />
+      <Field label="HANDLE (INSTAGRAM)" value={d.handle} onChange={set("handle")} rows={1} />
       <Field label="TAGLINE (LINKEDIN SUBHEADING)" value={d.tagline} onChange={set("tagline")} rows={1} />
       <Field label="LOCATION LINE (INSTAGRAM)" value={d.city} onChange={set("city")} rows={1} />
       <Field label="WEBSITE (PINTEREST SOURCE)" value={d.site} onChange={set("site")} rows={1} />
 
-      <div className="mt-3">
+      <div className="mt-4">
         <Swatch label="Accent" value={d.accent} onChange={set("accent")} />
-        <Swatch label="Dark tone" value={d.deep} onChange={set("deep")} />
-        <Swatch label="Light accent" value={d.soft} onChange={set("soft")} />
+        <Swatch label="Deep tone" value={d.deep} onChange={set("deep")} />
       </div>
 
-      <label className="flex items-center gap-2 mt-3" style={{ fontSize: 13 }}>
+      <label className="flex items-center gap-2 mt-4" style={{ fontSize: 13 }}>
         <input type="checkbox" checked={d.verified} onChange={(e) => set("verified")(e.target.checked)} />
         Show a verified tick in previews
       </label>
       <label className="flex items-center gap-2 mt-2" style={{ fontSize: 13 }}>
         <input type="checkbox" checked={d.brandRing} onChange={(e) => set("brandRing")(e.target.checked)} />
-        Use brand colours for the Instagram story ring instead of the Instagram gradient
+        Brand colours for the Instagram story ring instead of the Instagram gradient
+      </label>
+      <label className="flex items-center gap-2 mt-2" style={{ fontSize: 13 }}>
+        <input type="checkbox" checked={d.metrics} onChange={(e) => set("metrics")(e.target.checked)} />
+        Show sample likes and comments (illustrative only, not real numbers)
       </label>
 
-      <button onClick={() => onSave(d)} className="px-4 py-2 rounded-lg mt-4" style={{ background: T.ink, color: T.ivory, fontSize: 13 }}>
+      <button onClick={() => onSave(d)} className="px-4 py-2 rounded-lg mt-4"
+        style={{ background: T.ink, color: T.ivory, fontSize: 13 }}>
         Save brand settings
       </button>
     </div>
@@ -1383,9 +1405,7 @@ function UploadPanel({ onPublish, fileRef, plan, images, onBulk, onClear, onOpen
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-5">
-      <BrandPanel brand={brand} brandCfg={brandCfg} onSave={onSaveBrand} />
-
-      <div className="mt-10" style={{ fontFamily: DISPLAY, fontSize: 22 }}>Upload a content plan</div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 22 }}>Upload a content plan</div>
       <p className="mt-2" style={{ fontSize: 13, color: T.muted, lineHeight: 1.55 }}>
         Markdown with day headings like <code>{"# MONDAY — 7 SEPTEMBER"}</code> and post headings like <code>{"### POST 1 — MORNING"}</code>.
         Publishing replaces the plan. Notes stay attached to matching post numbers.
@@ -1409,7 +1429,7 @@ function UploadPanel({ onPublish, fileRef, plan, images, onBulk, onClear, onOpen
 
       {plan && (
         <div className="mt-6">
-          <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: AC }}>IMAGES</div>
+          <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>IMAGES</div>
           <p className="mt-2" style={{ fontSize: 13, color: T.muted }}>
             {plan.posts.length - missing.length} of {plan.posts.length} posts have an image.
             {missing.length > 0 && " Bulk upload fills the earliest empty posts in order."}
@@ -1429,20 +1449,20 @@ function UploadPanel({ onPublish, fileRef, plan, images, onBulk, onClear, onOpen
               <div key={p.id} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${T.line}`, aspectRatio: "4 / 5", background: T.champagne }}>
                 {images[p.id]
                   ? <img src={images[p.id]} alt="" className="w-full h-full" style={{ objectFit: "cover" }} />
-                  : <div className="w-full h-full flex items-center justify-center" style={{ fontFamily: MONO, fontSize: 10, color: AC }}>{p.number}</div>}
+                  : <div className="w-full h-full flex items-center justify-center" style={{ fontFamily: MONO, fontSize: 10, color: T.gold }}>{p.number}</div>}
               </div>
             ))}
           </div>
 
           <div className="mt-8">
-            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: AC }}>POSTS</div>
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.16em", color: T.gold }}>POSTS</div>
             <p className="mt-2" style={{ fontSize: 13, color: T.muted }}>
               Open a post to edit its caption, or remove it from the plan. Removing a post also drops its image and its notes.
             </p>
             {plan.posts.map((p) => (
               <div key={p.id} className="flex items-center gap-2 mt-2 p-3 rounded-xl" style={{ background: "#fff", border: `1px solid ${T.line}` }}>
                 <div className="min-w-0 flex-1">
-                  <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.12em", color: AC }}>
+                  <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.12em", color: T.gold }}>
                     POST {p.number} · {dayShort(p.dayLabel).toUpperCase()}
                   </div>
                   <div className="truncate" style={{ fontFamily: DISPLAY, fontSize: 15 }}>{p.fields.hook || p.theme}</div>
@@ -1465,6 +1485,8 @@ function UploadPanel({ onPublish, fileRef, plan, images, onBulk, onClear, onOpen
               </div>
             ))}
           </div>
+
+          <BrandPanel brand={brand} brandCfg={brandCfg} onSave={onSaveBrand} />
 
           <div className="mt-8 p-4 rounded-2xl" style={{ background: "#fff", border: `1px solid ${T.maroon}` }}>
             <div style={{ fontFamily: DISPLAY, fontSize: 18, color: T.maroon }}>Clear everything</div>
