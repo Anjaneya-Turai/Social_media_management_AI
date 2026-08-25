@@ -33,6 +33,9 @@ export const deletePost = (postId) =>
   req("data", { action: "post-delete", passcode: savedPass(), postId });
 export const clearAll = () => req("data", { action: "clear", passcode: savedPass() });
 
+export const saveBrand = (brand) =>
+  req("data", { action: "brand", passcode: savedPass(), brand });
+
 export const saveEntry = (postId, entry) => req("data", { action: "feedback", postId, entry });
 
 export const localName = () => localStorage.getItem("portal:name") || "";
